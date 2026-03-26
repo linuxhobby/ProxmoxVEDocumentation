@@ -17,7 +17,7 @@ crontab -e #添加下面一行
 二、恢复步骤
 1. 解压备份  
 ```
-bashtar xzf pveconfig-20261212.tar.gz -C / #根據具體文件名稱
+bashtar xzf pveconfig-20261212.tar.gz -C / # 根據具體文件名稱
 ```
 2. 恢复网络配置（重要！先别重启）
 ```
