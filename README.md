@@ -3,5 +3,5 @@
 # crontab -e,添加这一行：
 
 ```
-0 3 * * 3 /usr/local/bin/pve-backup.sh
+0 3 * * 3 /usr/local/bin/pvebackup.sh
 ```
