@@ -1,12 +1,15 @@
 ## pvetoos 配置、备份、恢复
-#在pve中添加計畫任務  
+
+一、备份步骤  
+1.在pve中添加計畫任務  
+将 *pvebackup.sh* 脚本加入到 */usr/local/bin/* 目录
 ```
 crontab -e #添加下面一行
 0 3 * * 3 /usr/local/bin/pvebackup.sh
 ```
 
 
-恢复步骤
+二、恢复步骤
 1. 解压备份  
 ```
 bashtar xzf pveconfig-20240101.tar.gz -C /
