@@ -6,7 +6,7 @@
 3. pvetools.sh  #PVE 美化腳本
 
 ## pvetoos 配置、备份、恢复  
-一、备份步骤  
+### 一、备份步骤  
 1.在pve中添加計畫任務  
 将 *pvebackup.sh* 脚本加入到 */usr/local/bin/* 目录
 ```
@@ -14,7 +14,7 @@ crontab -e #添加下面一行
 0 3 * * 4 /usr/local/bin/pvebackup.sh  #每周四3点执行一次
 ```
   
-二、恢复步骤
+### 二、恢复步骤
 1. 解压备份  
 ```
 bashtar xzf pveconfig-20261212.tar.gz -C / # 根據具體文件名稱
