@@ -5,10 +5,9 @@
 将 *pvebackup.sh* 脚本加入到 */usr/local/bin/* 目录
 ```
 crontab -e #添加下面一行
-0 3 * * 3 /usr/local/bin/pvebackup.sh
+0 3 * * 4 /usr/local/bin/pvebackup.sh  #每周四3点执行一次
 ```
-
-
+  
 二、恢复步骤
 1. 解压备份  
 ```
