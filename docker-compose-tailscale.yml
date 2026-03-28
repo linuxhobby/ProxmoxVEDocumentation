@@ -3,7 +3,7 @@ services:
     container_name: tailscale
     hostname: tailscaledocker           #根据实际主机名称修改
     image: tailscale/tailscale:latest
-    restart: unless-stopped
+    restart: always                     # unless-stopped，容易反复重启
     network_mode: host
     privileged: true
     volumes:
@@ -12,4 +12,4 @@ services:
     environment:
       - TS_AUTH_KEY=XXXXXXXXXXXXXXXXXXXXXXXX           #tailscale申请key
       - TS_STATE_DIR=/var/lib/tailscale
-      - TS_EXTRA_ARGS=--advertise-exit-node --advertise-routes=192.168.0.0/16
+      - TS_EXTRA_ARGS=--advertise-exit-node --advertise-routes=192.168.0.0/16 --accept-dns=true
