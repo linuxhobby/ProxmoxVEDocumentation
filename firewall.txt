@@ -1,0 +1,49 @@
+1、immortalwrt上没有安装tailscale，tailscale安装在其他设备，需要打洞。
+2、打洞成功后，需要访问PVE服务器：192.168.2.123:8006
+3、打洞成功后，需要访问immortalwrt：192.168.2.1，也就是防火墙本机。
+4、打洞成功后，需要访问NAS：http://192.168.2.11:9999。
+5、打洞成功后，需要访问NAS：http://192.168.2.12:5000。
+5、打洞成功后，需要访问NAS：http://192.168.2.13:5666。
+6、打洞成功后，需要通过windows远程桌面访问：192.168.2.110，192.168.2.110，192.168.2.110
+如何配置防火墙？
+
+uci show firewall
+
+# ===== 1. WAN 区域安全设置 =====
+uci set firewall.@zone[1].name='wan'
+uci set firewall.@zone[1].input='REJECT'   
+uci set firewall.@zone[1].forward='REJECT'    
+uci set firewall.@zone[1].output='ACCEPT'      
+uci set firewall.@zone[1].masq='1'  
+uci set firewall.@zone[1].mtu_fix='1'
+uci add_list firewall.@zone[1].network='wan'
+uci add_list firewall.@zone[1].network='wan6'
+uci add_list firewall.@zone[1].network='wwan'
+
+# ===== 2. LAN 区域保持内网正常 =====
+uci set firewall.@zone[0].name='lan'
+uci set firewall.@zone[0].input='ACCEPT'
+uci set firewall.@zone[0].forward='ACCEPT'
+uci set firewall.@zone[0].output='ACCEPT'
+uci set firewall.@zone[0].network='lan'
+
+# ===== 3. LAN → WAN 允许转发 =====
+uci set firewall.@forwarding[0].src='lan'
+uci set firewall.@forwarding[0].dest='wan'
+
+# ===== 4. 保留原有防火墙规则（DHCPv6 / ICMPv6 / passwall 等） =====
+# 不动，你之前的配置全部保留：
+# - Allow-DHCP-Renew
+# - Allow-Ping
+# - Allow-IGMP
+# - Allow-DHCPv6
+# - Allow-MLD
+# - Allow-ICMPv6-Input
+# - Allow-ICMPv6-Forward
+# - Allow-IPSec-ESP
+# - Allow-ISAKMP
+# - passwall、passwall_server
+
+# ===== 5. 提交并重启防火墙 =====
+uci commit firewall
+/etc/init.d/firewall restart
