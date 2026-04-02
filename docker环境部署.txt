@@ -1,0 +1,87 @@
+######  修改时区
+mv /etc/localtime /etc/localtime.bak
+ln -s /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+date
+
+apt install curl net-tools vim
+dpkg-reconfigure locales
+
+
+vi /etc/apt/sources.list
+
+
+##########  debian12
+deb http://mirrors.aliyun.com/debian/ bookworm main contrib non-free non-free-firmware
+deb http://mirrors.aliyun.com/debian/ bookworm-updates main contrib non-free non-free-firmware
+deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free non-free-firmware
+
+##########  debian13
+deb https://mirrors.aliyun.com/debian/ trixie main contrib non-free non-free-firmware
+deb-src https://mirrors.aliyun.com/debian/ trixie main contrib non-free non-free-firmware
+deb https://mirrors.aliyun.com/debian-security/ trixie-security main contrib non-free non-free-firmware
+deb-src https://mirrors.aliyun.com/debian-security/ trixie-security main contrib non-free non-free-firmware
+deb https://mirrors.aliyun.com/debian/ trixie-updates main contrib non-free non-free-firmware
+deb-src https://mirrors.aliyun.com/debian/ trixie-updates main contrib non-free non-free-firmware
+deb https://mirrors.aliyun.com/debian/ trixie-backports main contrib non-free non-free-firmware
+deb-src https://mirrors.aliyun.com/debian/ trixie-backports main contrib non-free non-free-firmware
+
+备份到这里
+
+安装docker
+
+apt update
+apt install ca-certificates curl gnupg lsb-release -y
+
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg |  gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/debian \
+  $(lsb_release -cs) stable" |  tee /etc/apt/sources.list.d/docker.list > /dev/null
+  
+apt update
+apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
+
+systemctl enable docker
+systemctl start docker
+systemctl status docker
+
+
+# 停掉所有旧的 Docker 服务和 socket
+sudo systemctl stop docker docker.socket
+sudo systemctl disable docker docker.socket
+
+# 确保 containerd 正常运行
+sudo systemctl enable --now containerd
+
+# 安装官方 Docker 脚本（绕过 Debian 12 默认 systemd 问题）
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# 测试 Docker
+docker run hello-world
+docker ps
+# 停掉所有旧的 Docker 服务和 socket
+sudo systemctl stop docker docker.socket
+sudo systemctl disable docker docker.socket
+
+# 确保 containerd 正常运行
+sudo systemctl enable --now containerd
+
+# 安装官方 Docker 脚本（绕过 Debian 12 默认 systemd 问题）
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# 测试 Docker
+docker run hello-world
+docker ps
+
+
+echo \
+"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://mirrors.aliyun.com/docker-ce/linux/debian \
+$(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+
+apt install pve-kernel-6.2
+
+debian-13-standard_13.0-0_amd64.tar.zst

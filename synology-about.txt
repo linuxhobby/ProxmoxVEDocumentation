@@ -1,0 +1,7 @@
+
+qm importdisk 900 /var/lib/vz/template/iso/DS918-701-42962.img local-lvm
+
+在套件中心 - 设置 - 套件来源中，添加「矿神 SPK」源，地址分别是：
+
+DSM6：https://spk.imnks.com/，还需要在「常规」-「信任层级」中选中「任何发行者」
+DSM7：https://spk7.imnks.com/

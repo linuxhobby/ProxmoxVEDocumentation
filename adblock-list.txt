@@ -1,0 +1,20 @@
+### 优酷广告域名 ###
+ad.youku.com
+log.youku.com
+adm.youku.com
+atm.youku.com
+fvid.atm.youku.com
+html.atm.youku.com
+valb.atm.youku.com
+valf.atm.youku.com
+valo.atm.youku.com
+valp.atm.youku.com
+lstat.youku.com
+speed.lstat.youku.com
+urchin.lstat.youku.com
+stat.youku.com
+static.lstat.youku.com
+valc.atm.youku.com
+vid.atm.youku.com
+walp.atm.youku.com
+4366ga.com
