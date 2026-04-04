@@ -1,5 +1,12 @@
 ### 记录各种安装，仅此而已 ###
 
+## 两个PVE TOOLS 自动化脚本
+```
+wget -q -O /root/pve_source.tar.gz 'http://szrq.hkfree.work/pve-source/pve_source.tar.gz' && tar zxvf /root/pve_source.tar.gz && /root/./pve_source
+
+bash <(curl -sSL https://ghfast.top/raw.githubusercontent.com/Mapleawaa/PVE-Tools-9/main/PVE-Tools.sh)
+```
+
 # Proxmox Virtual Environment 筆記  
 ## 虛擬機安裝和配置  
 1. install-immortalwrt，#安裝immortalwrt 步骤  
