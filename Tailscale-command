@@ -1,0 +1,25 @@
+其他命令
+命令	描述
+up	连接到 Tailscale，如果需要的话进行登录
+down	从 Tailscale 断开连接
+set	更改指定的首选项
+login	登录到 Tailscale 帐户
+logout	从 Tailscale 断开连接并使当前节点密钥失效
+switch	切换到不同的 Tailscale 帐户
+configure	配置主机以启用更多的 Tailscale 功能
+netcheck	显示本地网络条件的分析
+ip	显示 Tailscale IP 地址
+status	显示 tailscaled 及其连接的状态
+ping	在 Tailscale 层 ping 主机，查看其路由情况
+nc	连接到主机上的端口，连接到 stdin/stdout
+ssh	SSH 到 Tailscale 机器
+funnel	在互联网上提供内容和本地服务器
+serve	在您的 tailnet 上提供内容和本地服务器
+version	显示 Tailscale 版本
+web	运行用于控制 Tailscale 的 Web 服务器
+file	发送或接收文件
+bugreport	显示一个可共享的标识符，以帮助诊断问题
+cert	获取 TLS 证书
+lock	管理 tailnet 锁定
+licenses	获取开源许可信息
+update	将 Tailscale 更新到最新/不同版本
