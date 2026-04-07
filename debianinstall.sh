@@ -56,7 +56,7 @@ print_menu() {
         fi
     done
     echo ""
-    echo -e "  ${CYAN}a${NC} 全选   ${CYAN}n${NC} 全不选   ${RED}q${NC} 退出   ${CYAN}回车${NC} 开始执行"
+    echo -e "  ${GREEN}a${NC} 全选   ${GREEN}n${NC} 全不选   ${RED}q${NC} 退出   ${CYAN}回车${NC} 开始执行"
     echo -e "${BOLD}=====================================================${NC}"
     echo -n "  请输入: "
 }
