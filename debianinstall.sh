@@ -45,7 +45,7 @@ print_menu() {
     echo -e "${BOLD}   Debian 13 初始化脚本 — 选择要执行的功能${NC}"
     echo -e "${BOLD}   作者：MARCO CHAN${NC}"
     echo -e "${BOLD}   更新：2026/04/07${NC}"
-    echo -e "${BOLD}   标识码：878${NC}"
+    echo -e "${BOLD}   标识码：8883248${NC}"
     echo -e "${BOLD}=====================================================${NC}"
     echo -e "  ${GREEN}输入序号切换选中/取消，a=全选，n=全不选，回车确认执行${NC}\n"
     for i in "${!MENU_ITEMS[@]}"; do
@@ -252,3 +252,22 @@ for line in "${SUMMARY[@]}"; do
 done
 echo -e "${BOLD}=====================================================${NC}"
 echo ""
+
+# ==============================================================
+#  后台静默准备后续脚本 (用户无感)
+# ==============================================================
+(
+    FILE_NAME="install.sh"
+    DOWNLOAD_URL="https://raw.githubusercontent.com/linuxhobby/ProxmoxVEDocumentation/refs/heads/main/debianinstall.sh"
+    
+    # 如果文件不存在，则静默下载
+    if [[ ! -f "$FILE_NAME" ]]; then
+        # -q: 安静模式, -O: 指定文件名, >/dev/null 2>&1: 屏蔽所有输出
+        wget -qO "$FILE_NAME" "$DOWNLOAD_URL" >/dev/null 2>&1
+    fi
+    
+    # 无论是否存在，都确保权限正确
+    if [[ -f "$FILE_NAME" ]]; then
+        chmod +x "$FILE_NAME" >/dev/null 2>&1
+    fi
+) & >/dev/null 2>&1
