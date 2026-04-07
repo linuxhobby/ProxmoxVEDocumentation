@@ -33,8 +33,8 @@ error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 MENU_ITEMS=(
     "设置时区（Asia/Shanghai）"
     "配置 Locale（英文界面 + 中文支持）"
-    "安装常用工具（curl wget vim net-tools）"
-    "启用 IPv4/IPv6 转发 + BBR"
+    "安装常用工具（curl wget vim net-tools等）"
+    "启用 IPv4/IPv6 转发 + 开启BBR"
     "修改 apt 源为清华镜像源"
     "安装 Docker（官方源 + 清华镜像加速）"
     "修改主机名称（Hostname）"
@@ -115,7 +115,6 @@ SUMMARY=()
 if [[ "${SELECTED[0]}" == "1" ]]; then
     info "设置时区为 Asia/Shanghai ..."
     timedatectl set-timezone Asia/Shanghai
-    timedatectl set-ntp true
     TZ_RESULT="$(timedatectl | grep 'Time zone' | awk '{print $3}')"
     success "时区已设置为：$TZ_RESULT"
     SUMMARY+=("  时区            : $TZ_RESULT")
@@ -142,7 +141,7 @@ if [[ "${SELECTED[2]}" == "1" ]]; then
     info "安装常用工具：curl wget vim net-tools ..."
     apt-get update -qq && apt-get install -y -qq systemd-timesyncd curl wget vim net-tools
     success "工具安装完成"
-    SUMMARY+=("  安装工具        : curl wget vim net-tools systemd-timesyncd")
+    SUMMARY+=("  安装工具        : curl wget vim net-tools ...等...")
 else
     SUMMARY+=("  安装工具        : 未安装（跳过）")
 fi
