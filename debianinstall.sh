@@ -58,7 +58,7 @@ print_menu() {
     echo ""
     echo -e "  ${GREEN}a${NC} 全选   ${GREEN}n${NC} 全不选   ${RED}q${NC} 退出   ${CYAN}回车${NC} 开始执行"
     echo -e "${BOLD}=====================================================${NC}"
-    echo -n "  请输入: "
+    echo -n "  请输入【序列号】，然后回车（Enter）: "
 }
 
 # 交互循环
