@@ -133,7 +133,7 @@ fi
 # --- 3. 安装工具 ---
 if [[ "${SELECTED[2]}" == "1" ]]; then
     info "安装常用工具..."
-    apt-get update -qq && apt-get install -y -qq curl wget vim net-tools
+    apt-get update -qq && apt-get install -y -q curl wget vim net-tools
     success "工具安装完成"
     SUMMARY+=("  安装工具        : curl wget vim net-tools")
 else
