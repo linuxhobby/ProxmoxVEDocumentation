@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================
 #  Debian 13 一键初始化脚本
-#  功能：时区、locale、常用工具、IPv4/IPv6转发、BBR、清华源、Docker、修改主机名
-#  执行：chmod +x init.sh && ./init.sh
+#  功能：时区、locale、常用工具、IPv4/IPv6转发、BBR、清华源、Docker、V2Ray、修改主机名
+#  更新：2026/04/07
 # ==============================================================
 
 set -e
@@ -24,7 +24,7 @@ error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 [[ $EUID -ne 0 ]] && error "请使用 root 权限运行此脚本：sudo bash $0"
 
 # ==============================================================
-#  多选菜单
+#  多选菜单 (注意这里的顺序)
 # ==============================================================
 
 MENU_ITEMS=(
@@ -34,7 +34,7 @@ MENU_ITEMS=(
     "启用 IPv4/IPv6 转发 + 开启BBR"
     "修改 apt 源为清华镜像源"
     "安装 Docker（官方源 + 清华镜像加速）"
-    "执行 V2Ray安装脚本"
+    "执行 V2Ray 安装脚本2"
     "修改主机名称（Hostname）"
 )
 # 默认全不选
@@ -90,7 +90,8 @@ while true; do
             [[ "${SELECTED[$idx]}" == "1" ]] && SELECTED[$idx]=0 || SELECTED[$idx]=1
             ;;
         *)
-            echo -e "\n  ${YELLOW}[WARN]${NC}  无效输入，请输入 1-7 / a / n / q / 回车"
+            # 这里原本你写的是 1-7，已修正为 1-8
+            echo -e "\n  ${YELLOW}[WARN]${NC}  无效输入，请输入 1-8 / a / n / q / 回车"
             sleep 1
             ;;
     esac
@@ -113,37 +114,30 @@ if [[ "${SELECTED[0]}" == "1" ]]; then
     success "时区已设置为：$TZ_RESULT"
     SUMMARY+=("  时区            : $TZ_RESULT")
 else
-    warn "跳过：设置时区"
     SUMMARY+=("  时区            : 未修改（跳过）")
 fi
 
 # --- 2. Locale ---
 if [[ "${SELECTED[1]}" == "1" ]]; then
-    info "配置 Locale（英文界面 + 中文支持）..."
+    info "配置 Locale..."
     apt-get update -qq && apt-get install -y -qq locales
     sed -i 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
     sed -i 's/# zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen
     locale-gen > /dev/null 2>&1
     update-locale LANG=en_US.UTF-8 LC_CTYPE=zh_CN.UTF-8
-    cat > /etc/default/locale <<EOF
-LANG=en_US.UTF-8
-LC_CTYPE=zh_CN.UTF-8
-EOF
     success "Locale 配置完成"
     SUMMARY+=("  系统语言        : en_US.UTF-8（支持中文）")
 else
-    warn "跳过：配置 Locale"
     SUMMARY+=("  系统语言        : 未修改（跳过）")
 fi
 
 # --- 3. 安装工具 ---
 if [[ "${SELECTED[2]}" == "1" ]]; then
-    info "安装常用工具：curl wget vim net-tools ..."
+    info "安装常用工具..."
     apt-get update -qq && apt-get install -y -qq curl wget vim net-tools
     success "工具安装完成"
     SUMMARY+=("  安装工具        : curl wget vim net-tools")
 else
-    warn "跳过：安装常用工具"
     SUMMARY+=("  安装工具        : 未安装（跳过）")
 fi
 
@@ -161,13 +155,12 @@ EOF
     success "BBR 已启用: $BBR_STATUS"
     SUMMARY+=("  网络优化        : 转发+BBR已开启")
 else
-    warn "跳过：网络优化"
     SUMMARY+=("  网络优化        : 未配置（跳过）")
 fi
 
 # --- 5. 清华源 ---
 if [[ "${SELECTED[4]}" == "1" ]]; then
-    info "修改 apt 源为清华镜像源 ..."
+    info "修改 apt 源为清华镜像源..."
     CODENAME=$(lsb_release -cs 2>/dev/null || grep VERSION_CODENAME /etc/os-release | cut -d= -f2 || echo "trixie")
     [[ -f /etc/apt/sources.list ]] && mv /etc/apt/sources.list /etc/apt/sources.list.disabled 2>/dev/null || true
     cat > /etc/apt/sources.list.d/tuna.sources <<EOF
@@ -186,13 +179,12 @@ EOF
     apt-get update -qq && success "apt 源已切换" || warn "源更新失败"
     SUMMARY+=("  apt 源          : 清华镜像源")
 else
-    warn "跳过：修改 apt 源"
     SUMMARY+=("  apt 源          : 未修改（跳过）")
 fi
 
 # --- 6. Docker ---
 if [[ "${SELECTED[5]}" == "1" ]]; then
-    info "安装 Docker ..."
+    info "安装 Docker..."
     if command -v docker &>/dev/null; then
         warn "Docker 已安装，跳过"
         SUMMARY+=("  Docker          : 已存在（跳过）")
@@ -224,49 +216,36 @@ EOF
         SUMMARY+=("  Docker          : 已安装并开启加速")
     fi
 else
-    warn "跳过：安装 Docker"
     SUMMARY+=("  Docker          : 未安装（跳过）")
 fi
 
-# --- 7. v2ray ---
+# --- 7. V2Ray (对应菜单第7项 SELECTED[6]) ---
 if [[ "${SELECTED[6]}" == "1" ]]; then
-    info "准备安装 v2ray 一键安装脚本 ..."
-    # 检查依赖
+    info "准备安装 V2Ray 一键安装脚本..."
     apt-get update -qq && apt-get install -y -qq wget curl
-    
-    # 执行 v2ray 一键脚本
-    # 使用 bash <(wget...) 方式
-    warn "即将进入 v2ray 交互式安装界面，请根据提示操作。"
+    warn "即将进入 V2Ray 交互式安装界面，请根据提示操作。"
     sleep 2
     bash <(wget -qO- -o- https://github.com/233boy/v2ray/raw/master/install.sh)
-    
-    success "v2ray 脚本执行完毕"
-    SUMMARY+=("  v2ray           : 已运行安装脚本")
+    success "V2Ray 脚本执行完毕"
+    SUMMARY+=("  V2Ray           : 已运行安装脚本")
 else
-    SUMMARY+=("  v2ray           : 未安装（跳过）")
+    SUMMARY+=("  V2Ray           : 未安装（跳过）")
 fi
 
-# --- 8. 主机名 ---
+# --- 8. 主机名 (对应菜单第8项 SELECTED[7]) ---
 if [[ "${SELECTED[7]}" == "1" ]]; then
-    # 获取当前主机名
     CURRENT_HOSTNAME=$(hostname)
-    
     echo -e "\n${CYAN}[INPUT]${NC} 当前主机名 (Hostname) 为: ${RED}$CURRENT_HOSTNAME${NC}"
-    echo -e "\n${CYAN}[INPUT]${NC} 请输入新的主机名(Hostname):"
+    echo -e "${CYAN}[INPUT]${NC} 请输入新的主机名 (Hostname):"
     read -r NEW_HOSTNAME
-    if [[ -n "$NEW_HOSTNAME" ]]; then
-        OLD_HOSTNAME=$(hostname)
-        info "正在修改主机名: ${YELLOW}$OLD_HOSTNAME${NC} -> ${GREEN}$NEW_HOSTNAME${NC} ..."
-        # 永久修改主机名
+    if [[ -n "$NEW_HOSTNAME" && "$NEW_HOSTNAME" != "$CURRENT_HOSTNAME" ]]; then
         hostnamectl set-hostname "$NEW_HOSTNAME"
-        # 修改 /etc/hosts 确保解析正确
-        sed -i "s/$OLD_HOSTNAME/$NEW_HOSTNAME/g" /etc/hosts
+        sed -i "s/$CURRENT_HOSTNAME/$NEW_HOSTNAME/g" /etc/hosts
         success "主机名已修改为: $NEW_HOSTNAME"
-        # 增加重启提示
-        echo -e "${RED}${BOLD}[!] 提示: 主机名已更改，部分服务需重启后才能识别新名称，建议稍后重启系统。${NC}"
-        SUMMARY+=("  主机名          : $OLD_HOSTNAME -> $NEW_HOSTNAME")
+        echo -e "${RED}${BOLD}[!] 提示: 主机名已更改，建议稍后重启系统生效。${NC}"
+        SUMMARY+=("  主机名          : $CURRENT_HOSTNAME -> $NEW_HOSTNAME")
     else
-        SUMMARY+=("  主机名          : 未修改（输入为空）")
+        SUMMARY+=("  主机名          : 未修改")
     fi
 else
     SUMMARY+=("  主机名          : 未修改（跳过）")
