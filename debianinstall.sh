@@ -44,6 +44,7 @@ print_menu() {
     echo -e "${BOLD}   Debian 13 初始化脚本 — 选择要执行的功能${NC}"
     echo -e "${BOLD}   作者：marco.chan${NC}"
     echo -e "${BOLD}   更新：2026/04/07${NC}"
+    echo -e "${BOLD}   说明：本脚本适合新安装的Debian13系统，适合基础配置没有复杂要求的新手。${NC}"
     echo -e "${BOLD}=====================================================${NC}"
     echo -e "  ${CYAN}输入序号切换选中/取消，a=全选，n=全不选，回车确认执行${NC}\n"
     for i in "${!MENU_ITEMS[@]}"; do
