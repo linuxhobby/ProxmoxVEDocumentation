@@ -34,10 +34,11 @@ MENU_ITEMS=(
     "启用 IPv4/IPv6 转发 + 开启BBR"
     "修改 apt 源为清华镜像源"
     "安装 Docker（官方源 + 清华镜像加速）"
+    "执行 V2Ray安装脚本"
     "修改主机名称（Hostname）"
 )
 # 默认全不选
-SELECTED=(0 0 0 0 0 0 0)
+SELECTED=(0 0 0 0 0 0 0 0)
 
 print_menu() {
     clear
@@ -77,14 +78,14 @@ while true; do
                 break
             fi
             ;;
-        a|A) SELECTED=(1 1 1 1 1 1 1) ;;
-        n|N) SELECTED=(0 0 0 0 0 0 0) ;;
+        a|A) SELECTED=(1 1 1 1 1 1 1 1) ;;
+        n|N) SELECTED=(0 0 0 0 0 0 0 0) ;;
         q|Q)
             clear
             echo -e "\n  ${RED}已退出，未执行任何操作。${NC}\n"
             exit 0
             ;;
-        [1-7])
+        [1-8])
             idx=$((input - 1))
             [[ "${SELECTED[$idx]}" == "1" ]] && SELECTED[$idx]=0 || SELECTED[$idx]=1
             ;;
@@ -227,8 +228,16 @@ else
     SUMMARY+=("  Docker          : 未安装（跳过）")
 fi
 
-# --- 7. 主机名 ---
-if [[ "${SELECTED[6]}" == "1" ]]; then
+# --- 7. v2ray ---
+if [[ "${SELECTED[7]}" == "1" ]]; then
+bash <(wget -qO- -o- https://github.com/233boy/v2ray/raw/master/install.sh)  
+else
+    warn "跳过：v2Ray安装"
+    SUMMARY+=("  v2Ray            : 未安装（跳过）")
+fi
+
+# --- 8. 主机名 ---
+if [[ "${SELECTED[7]}" == "1" ]]; then
     # 获取当前主机名
     CURRENT_HOSTNAME=$(hostname)
     
@@ -244,7 +253,7 @@ if [[ "${SELECTED[6]}" == "1" ]]; then
         sed -i "s/$OLD_HOSTNAME/$NEW_HOSTNAME/g" /etc/hosts
         success "主机名已修改为: $NEW_HOSTNAME"
         # 增加重启提示
-        echo -e "${GREEN}${BOLD}[!] 提示: 主机名已更改，部分服务需重启后才能识别新名称，建议稍后重启系统。${NC}"
+        echo -e "${RED}${BOLD}[!] 提示: 主机名已更改，部分服务需重启后才能识别新名称，建议稍后重启系统。${NC}"
         SUMMARY+=("  主机名          : $OLD_HOSTNAME -> $NEW_HOSTNAME")
     else
         SUMMARY+=("  主机名          : 未修改（输入为空）")
