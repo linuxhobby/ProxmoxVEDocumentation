@@ -34,7 +34,6 @@ MENU_ITEMS=(
     "启用 IPv4/IPv6 转发 + 开启BBR"
     "修改 apt 源为清华镜像源"
     "安装 Docker（官方源 + 清华镜像加速）"
-    "执行 V2Ray 安装脚本2"
     "修改主机名称（Hostname）"
 )
 # 默认全不选
