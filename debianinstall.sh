@@ -38,7 +38,7 @@ MENU_ITEMS=(
     "修改主机名称（Hostname）"
 )
 # 默认全不选
-SELECTED=(0 0 0 0 0 0 0 0)
+SELECTED=(0 0 0 0 0 0 0)
 
 print_menu() {
     clear
@@ -78,20 +78,20 @@ while true; do
                 break
             fi
             ;;
-        a|A) SELECTED=(1 1 1 1 1 1 1 1) ;;
-        n|N) SELECTED=(0 0 0 0 0 0 0 0) ;;
+        a|A) SELECTED=(1 1 1 1 1 1 1) ;;
+        n|N) SELECTED=(0 0 0 0 0 0 0) ;;
         q|Q)
             clear
             echo -e "\n  ${RED}已退出，未执行任何操作。${NC}\n"
             exit 0
             ;;
-        [1-8])
+        [1-7])
             idx=$((input - 1))
             [[ "${SELECTED[$idx]}" == "1" ]] && SELECTED[$idx]=0 || SELECTED[$idx]=1
             ;;
         *)
             # 这里原本你写的是 1-7，已修正为 1-8
-            echo -e "\n  ${YELLOW}[WARN]${NC}  无效输入，请输入 1-8 / a / n / q / 回车"
+            echo -e "\n  ${YELLOW}[WARN]${NC}  无效输入，请输入 1-7 / a / n / q / 回车"
             sleep 1
             ;;
     esac
@@ -219,21 +219,10 @@ else
     SUMMARY+=("  Docker          : 未安装（跳过）")
 fi
 
-# --- 7. V2Ray (对应菜单第7项 SELECTED[6]) ---
-if [[ "${SELECTED[6]}" == "1" ]]; then
-    info "准备安装 V2Ray 一键安装脚本..."
-    apt-get update -qq && apt-get install -y -qq wget curl
-    warn "即将进入 V2Ray 交互式安装界面，请根据提示操作。"
-    sleep 2
-    bash <(wget -qO- -o- https://github.com/233boy/v2ray/raw/master/install.sh)
-    success "V2Ray 脚本执行完毕"
-    SUMMARY+=("  V2Ray           : 已运行安装脚本")
-else
-    SUMMARY+=("  V2Ray           : 未安装（跳过）")
-fi
 
-# --- 8. 主机名 (对应菜单第8项 SELECTED[7]) ---
-if [[ "${SELECTED[7]}" == "1" ]]; then
+
+# --- 7. 主机名 (对应菜单第7项 SELECTED[6]) ---
+if [[ "${SELECTED[6]}" == "1" ]]; then
     CURRENT_HOSTNAME=$(hostname)
     echo -e "\n${CYAN}[INPUT]${NC} 当前主机名 (Hostname) 为: ${RED}$CURRENT_HOSTNAME${NC}"
     echo -e "${CYAN}[INPUT]${NC} 请输入新的主机名 (Hostname):"
