@@ -32,8 +32,8 @@ MENU_ITEMS=(
     "安装常用工具（curl wget vim net-tools）"
     "启用 IPv4/IPv6 转发 + BBR"
 )
-# 默认全选
-SELECTED=(1 1 1 1)
+# 默认全不选
+SELECTED=(0 0 0 0)
 
 print_menu() {
     clear
@@ -50,7 +50,7 @@ print_menu() {
         fi
     done
     echo ""
-    echo -e "  ${YELLOW}a${NC} 全选   ${YELLOW}n${NC} 全不选   ${YELLOW}回车${NC} 开始执行"
+    echo -e "  ${YELLOW}a${NC} 全选   ${YELLOW}n${NC} 全不选   ${YELLOW}q${NC} 退出   ${YELLOW}回车${NC} 开始执行"
     echo -e "${BOLD}=====================================================${NC}"
     echo -n "  请输入: "
 }
@@ -73,12 +73,17 @@ while true; do
             ;;
         a|A) SELECTED=(1 1 1 1) ;;
         n|N) SELECTED=(0 0 0 0) ;;
+        q|Q)
+            clear
+            echo -e "\n  ${YELLOW}已退出，未执行任何操作。${NC}\n"
+            exit 0
+            ;;
         [1-4])
             idx=$((input - 1))
             [[ "${SELECTED[$idx]}" == "1" ]] && SELECTED[$idx]=0 || SELECTED[$idx]=1
             ;;
         *)
-            echo -e "\n  ${YELLOW}[WARN]${NC}  无效输入，请输入 1-4 / a / n / 回车"
+            echo -e "\n  ${YELLOW}[WARN]${NC}  无效输入，请输入 1-4 / a / n / q / 回车"
             sleep 1
             ;;
     esac
