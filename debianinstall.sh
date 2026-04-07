@@ -2,6 +2,7 @@
 # ==============================================================
 #  Debian 13 一键初始化脚本
 #  功能：时区、locale、常用工具、IPv4/IPv6转发、BBR
+# 执行：bash <(curl -fsSL https://raw.githubusercontent.com/linuxhobby/ProxmoxVEDocumentation/refs/heads/main/debianinstall.sh)
 # ==============================================================
 
 set -e
@@ -50,7 +51,7 @@ print_menu() {
         fi
     done
     echo ""
-    echo -e "  ${YELLOW}a${NC} 全选   ${YELLOW}n${NC} 全不选   ${YELLOW}q${NC} 退出   ${YELLOW}回车${NC} 开始执行"
+    echo -e "  ${CYAN}a${NC} 全选   ${CYAN}n${NC} 全不选   ${CYAN}q${NC} 退出   ${CYAN}回车${NC} 开始执行"
     echo -e "${BOLD}=====================================================${NC}"
     echo -n "  请输入: "
 }
@@ -144,9 +145,9 @@ fi
 if [[ "${SELECTED[2]}" == "1" ]]; then
     info "安装常用工具：curl wget vim net-tools ..."
     apt-get update -qq
-    apt-get install -y -qq curl wget vim net-tools
-    success "curl、wget、vim、net-tools 安装完成"
-    SUMMARY+=("  安装工具    : curl wget vim net-tools")
+    apt-get install -y -qq wget vim net-tools
+    success "wget、vim、net-tools 安装完成"
+    SUMMARY+=("  安装工具    : wget vim net-tools")
 else
     warn "跳过：安装常用工具"
     SUMMARY+=("  安装工具    : 未安装（跳过）")
