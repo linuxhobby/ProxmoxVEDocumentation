@@ -46,7 +46,7 @@ print_menu() {
     echo -e "${BOLD}   作者：MARCO CHAN${NC}"
     echo -e "${BOLD}   更新：2026/04/07${NC}"
     echo -e "${BOLD}=====================================================${NC}"
-    echo -e "  ${CYAN}输入序号切换选中/取消，a=全选，n=全不选，回车确认执行${NC}\n"
+    echo -e "  ${GREEN}输入序号切换选中/取消，a=全选，n=全不选，回车确认执行${NC}\n"
     for i in "${!MENU_ITEMS[@]}"; do
         local idx=$((i + 1))
         if [[ "${SELECTED[$i]}" == "1" ]]; then
@@ -56,7 +56,7 @@ print_menu() {
         fi
     done
     echo ""
-    echo -e "  ${CYAN}a${NC} 全选   ${CYAN}n${NC} 全不选   ${CYAN}q${NC} 退出   ${CYAN}回车${NC} 开始执行"
+    echo -e "  ${CYAN}a${NC} 全选   ${CYAN}n${NC} 全不选   ${RED}q${NC} 退出   ${CYAN}回车${NC} 开始执行"
     echo -e "${BOLD}=====================================================${NC}"
     echo -n "  请输入: "
 }
