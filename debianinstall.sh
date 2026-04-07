@@ -354,7 +354,7 @@ if [[ "${SELECTED[6]}" == "1" ]]; then
         SUMMARY+=("  主机名          : $OLD_HOSTNAME -> $NEW_HOSTNAME")
     else
         warn "输入为空，跳过修改"
-        SUMMARY+=("  主机名      : 未修改（输入为空）")
+        SUMMARY+=("  主机名        : 未修改（输入为空）")
     fi
 else
     SUMMARY+=("  主机名      : 未修改（跳过）")
