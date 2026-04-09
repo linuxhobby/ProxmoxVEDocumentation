@@ -4,6 +4,9 @@ immortalWRT安装配置
 2、加载镜像  
 qm importdisk 100 /var/lib/vz/template/iso/immortalwrt-23.05.7-x86-generic-ext4-combined-efi.img local-lvm
 
+qm importdisk 900 /var/lib/vz/template/iso/immortalwrt-23.05.7-x86-64-generic-ext4-combined-efi-2g-swap.img local-lvm
+
+
 二、修改/etc/config/network，lan ip=192.168.2.1  
 
 三、修改源：sed -e 's,https://downloads.immortalwrt.org,https://mirrors.zju.edu.cn/immortalwrt,g' \  
@@ -26,7 +29,7 @@ opkg update
 opkg install ipset ipt2socks iptables iptables-mod-conntrack-extra iptables-mod-iprange iptables-mod-socket iptables-mod-tproxy kmod-ipt-nat
 
 opkg update
-opkg install luci-theme-argon  
+opkg install luci-theme-argon
  
 opkg update
 opkg install usbutils
@@ -71,3 +74,12 @@ uci set firewall.@rule[-1].target='ACCEPT'
 # 4. 提交修改并重启防火墙
 uci commit firewall
 /etc/init.d/firewall restart
+
+
+######## 交换分区
+dd if=/dev/zero of=/overlay/swapfile bs=1M count=512
+chmod 600 /overlay/swapfile
+mkswap /overlay/swapfile
+swapon /overlay/swapfile
+sed -i '/^exit 0/i swapon /overlay/swapfile' /etc/rc.local
+
