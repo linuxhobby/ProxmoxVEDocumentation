@@ -1,4 +1,4 @@
-其他命令
+### 其他命令
 命令	描述
 up	连接到 Tailscale，如果需要的话进行登录
 down	从 Tailscale 断开连接
