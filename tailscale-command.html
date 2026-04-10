@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tailscale CLI Reference</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f6f8fa; color: #1f2328; padding: 2rem 1rem; }
+  .container { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 600; margin-bottom: 0.25rem; }
+  .subtitle { font-size: 16px; color: #656d76; margin-bottom: 1.5rem; }
+  .search-bar { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px 12px; margin-bottom: 1.5rem; }
+  .search-bar input { border: none; outline: none; font-size: 16px; color: #1f2328; width: 100%; background: transparent; font-family: 'SFMono-Regular', Consolas, monospace; }
+  .search-bar input::placeholder { color: #8c959f; }
+  .section { margin-bottom: 1.5rem; }
+  .section-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #656d76; margin-bottom: 8px; }
+  .cmd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
+  .cmd-card { display: flex; align-items: flex-start; gap: 10px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 10px 12px; transition: border-color 0.15s; }
+  .cmd-card:hover { border-color: #0969da; }
+  .cmd-name { font-size: 16px; font-weight: 600; color: #0969da; font-family: 'SFMono-Regular', Consolas, monospace; min-width: 76px; flex-shrink: 0; padding-top: 1px; }
+  .cmd-desc { font-size: 15px; color: #656d76; line-height: 1.4; }
+  .no-result { font-size: 14px; color: #8c959f; padding: 1rem 0; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0d1117; color: #e6edf3; }
+    .search-bar, .cmd-card { background: #161b22; border-color: #30363d; }
+    .cmd-card:hover { border-color: #58a6ff; }
+    .cmd-name { color: #58a6ff; }
+    .cmd-desc, .subtitle { color: #8b949e; }
+    .section-title { color: #8b949e; }
+    .search-bar input { color: #e6edf3; }
+    .search-bar input::placeholder { color: #484f58; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Tailscale CLI Reference</h1>
+  <p class="subtitle">所有命令一览，支持搜索过滤</p>
+  <div class="search-bar">
+    <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="color:#8c959f;flex-shrink:0"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+    <input type="text" placeholder="搜索命令..." id="search" oninput="filter()" />
+  </div>
+  <div id="content"></div>
+</div>
+<script>
+const data = [
+  { cat: "连接", items: [
+    { cmd: "up",      desc: "连接到 Tailscale，如需时进行登录" },
+    { cmd: "down",    desc: "从 Tailscale 断开连接" },
+    { cmd: "set",     desc: "更改指定的首选项" },
+  ]},
+  { cat: "账号", items: [
+    { cmd: "login",   desc: "登录到 Tailscale 账户" },
+    { cmd: "logout",  desc: "断开连接并使当前节点密钥失效" },
+    { cmd: "switch",  desc: "切换到不同的 Tailscale 账户" },
+  ]},
+  { cat: "网络诊断", items: [
+    { cmd: "netcheck", desc: "显示本地网络条件分析" },
+    { cmd: "ping",     desc: "在 Tailscale 层 ping 主机，查看路由情况" },
+    { cmd: "status",   desc: "显示 tailscaled 及其连接的状态" },
+    { cmd: "ip",       desc: "显示 Tailscale IP 地址" },
+  ]},
+  { cat: "连接工具", items: [
+    { cmd: "nc",      desc: "连接到主机上的端口，接入 stdin/stdout" },
+    { cmd: "ssh",     desc: "SSH 到 Tailscale 机器" },
+    { cmd: "file",    desc: "发送或接收文件" },
+  ]},
+  { cat: "对外服务", items: [
+    { cmd: "funnel",  desc: "在公网上暴露内容和本地服务器" },
+    { cmd: "serve",   desc: "在 tailnet 内部提供内容和本地服务器" },
+    { cmd: "cert",    desc: "获取 TLS 证书" },
+  ]},
+  { cat: "系统管理", items: [
+    { cmd: "configure", desc: "配置主机以启用更多 Tailscale 功能" },
+    { cmd: "lock",      desc: "管理 tailnet 锁定" },
+    { cmd: "update",    desc: "将 Tailscale 更新到最新或指定版本" },
+    { cmd: "web",       desc: "运行用于控制 Tailscale 的 Web 服务器" },
+  ]},
+  { cat: "其他", items: [
+    { cmd: "version",   desc: "显示 Tailscale 版本" },
+    { cmd: "bugreport", desc: "显示可共享的标识符以帮助诊断问题" },
+    { cmd: "licenses",  desc: "获取开源许可信息" },
+  ]},
+];
+
+function render(q) {
+  const container = document.getElementById('content');
+  q = (q || '').toLowerCase().trim();
+  let html = '';
+  let any = false;
+  data.forEach(section => {
+    const items = q ? section.items.filter(i => i.cmd.includes(q) || i.desc.toLowerCase().includes(q)) : section.items;
+    if (!items.length) return;
+    any = true;
+    html += `<div class="section"><div class="section-title">${section.cat}</div><div class="cmd-grid">`;
+    items.forEach(i => {
+      html += `<div class="cmd-card"><span class="cmd-name">${i.cmd}</span><span class="cmd-desc">${i.desc}</span></div>`;
+    });
+    html += `</div></div>`;
+  });
+  if (!any) html = `<div class="no-result">未找到匹配命令</div>`;
+  container.innerHTML = html;
+}
+
+function filter() { render(document.getElementById('search').value); }
+render('');
+</script>
+</body>
+</html>
