@@ -110,6 +110,7 @@ SUMMARY=()
 if [[ "${SELECTED[0]}" == "1" ]]; then
     info "设置时区为 Asia/Shanghai ..."
     timedatectl set-timezone Asia/Shanghai
+    ntpdate pool.ntp.org
     TZ_RESULT="$(timedatectl | grep 'Time zone' | awk '{print $3}')"
     success "时区已设置为：$TZ_RESULT"
     SUMMARY+=("  时区            : $TZ_RESULT")
@@ -134,7 +135,7 @@ fi
 # --- 3. 安装工具 ---
 if [[ "${SELECTED[2]}" == "1" ]]; then
     info "安装常用工具..."
-    apt-get install -y -q curl wget vim net-tools
+    apt-get install -y -q curl wget vim net-tools ntpsec-ntpdate
     success "工具安装完成"
     SUMMARY+=("  安装工具        : curl wget vim net-tools")
 else
