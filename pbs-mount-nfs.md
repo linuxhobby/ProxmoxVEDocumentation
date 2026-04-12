@@ -25,10 +25,14 @@ df -h | grep storage_ugreen
 
 ls /mnt/storage_ugreen
 
-4. 设置开机自动挂载（/etc/fstab）systemctl daemon-reload
+4. 设置开机自动挂载（/etc/fstab）
 vi /etc/fstab
 添加：
-echo "192.168.2.11:/volume1/storage500GB1 /mnt/storage_ugreen nfs vers=3,tcp,rw,nolock,noatime,hard,intr,timeo=30,retrans=3,rsize=32768,wsize=32768 0 0" >> /etc/fstab
+echo "192.168.2.11:/volume1/storage500GB1 /mnt/storage_ugreen nfs vers=3,tcp,rw,noatime,soft,nofail,_netdev,timeo=30,retrans=3,retry=0,rsize=32768,wsize=32768 0 0" >> /etc/fstab
+systemctl daemon-reload
+
+### 验证
+mountpoint -q /mnt/storage_ugreen && echo "✅ 挂载成功" || echo "❌ 挂载失败"
 
 关键参数说明：
 _netdev — 等网络就绪后再挂载（PBS服务器重要）
@@ -61,3 +65,68 @@ Datastore：nas-storage
 
 PBS：调整精简&GC作业即可。
 PVE：设置备份计划即可。
+
+创建 systemd mount 单元，注意：文件名必须和挂载路径严格对应，/mnt/storage_ugreen → mnt-storage_ugreen
+vi /etc/systemd/system/mnt-storage_ugreen.mount
+[Unit]
+Description=UGREEN NAS NFS Mount
+After=network-online.target
+Wants=network-online.target
+
+[Mount]
+What=192.168.2.11:/volume1/storage500GB1
+Where=/mnt/storage_ugreen
+Type=nfs
+Options=vers=3,tcp,rw,noatime,soft,timeo=30,retrans=3,retry=0,rsize=32768,wsize=32768
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+创建 systemd automount 单元
+vi /etc/systemd/system/mnt-storage_ugreen.automount
+[Unit]
+Description=UGREEN NAS NFS Automount
+
+[Automount]
+Where=/mnt/storage_ugreen
+TimeoutIdleSec=0
+
+[Install]
+WantedBy=multi-user.target
+
+
+创建自动触发单元
+vi /etc/systemd/system/trigger-ugreen-mount.service
+
+[Unit]
+Description=Trigger UGREEN NFS Mount
+After=mnt-storage_ugreen.automount network-online.target
+Wants=mnt-storage_ugreen.automount
+
+[Service]
+Type=oneshot
+ExecStart=/bin/ls /mnt/storage_ugreen
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+第五步：启用并启动
+systemctl daemon-reload
+
+# 启用开机自动挂载
+systemctl enable mnt-storage_ugreen.automount
+
+# 启动automount
+systemctl start mnt-storage_ugreen.automount
+
+# 触发一次挂载（访问挂载点即可）
+ls /mnt/storage_ugreen
+
+### 验证状态
+systemctl status mnt-storage_ugreen.automount
+systemctl status mnt-storage_ugreen.mount

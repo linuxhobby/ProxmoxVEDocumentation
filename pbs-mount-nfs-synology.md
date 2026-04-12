@@ -25,9 +25,12 @@ su -s /bin/bash backup -c "ls /mnt/storage_synology"
 proxmox-backup-manager datastore create storage-synology /mnt/storage_synology/pbs-datastore --tuning "gc-atime-safety-check=0"
 
 6.PVE Web界面 → 数据中心 → 存储 → 添加 → Proxmox Backup Server
+01:59在 PVE Web UI 操作：
+
+数据中心 → 存储 → 添加 → Proxmox Backup Server，填写：
 ID：storage-synology
-服务器：pbs服务器ip，根据实际情况填写
-Datastore：storage-synology
-用户名：root@pam，必须加上@pam
-密码：PBS的root密码，根据实际情况填写
-指纹：根据实际情况填写
+服务器：192.168.2.125（PBS 的 IP）
+用户名：root@pam
+密码：PBS 的 root 密码
+数据存储：选择 storage-synology
+
