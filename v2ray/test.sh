@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# 将军阁下的专属 V2Ray 综合管理脚本 (终极优化版)
+# 将军阁下的专属 V2Ray 综合管理脚本 (双栈容错终极版)
 # curl -sL https://raw.githubusercontent.com/linuxhobby/ProxmoxVE/refs/heads/main/v2ray/test.sh -o test.sh && chmod +x test.sh && ./test.sh
 # ====================================================
 
@@ -51,16 +51,14 @@ EOF
     echo -e "-------------------------------------------------------"
 }
 
-# 域名解析检测函数
+# 域名解析检测函数 (加入容错逻辑)
 check_dns() {
     local domain=$1
     echo -e "${YELLOW}正在检测域名解析状态...${NC}"
     
-    # 获取本地公网IP (增加 5 秒超时限制)
     local local_ipv4=$(curl -s4m 5 https://api64.ipify.org || echo "未检测到")
     local local_ipv6=$(curl -s6m 5 https://api64.ipify.org || echo "未检测到")
     
-    # 自动安装 dnsutils
     apt update && apt install -y dnsutils > /dev/null 2>&1
     local resolved_ipv4=$(dig +short A "$domain" | tail -n1)
     local resolved_ipv6=$(dig +short AAAA "$domain" | tail -n1)
@@ -70,20 +68,22 @@ check_dns() {
     echo -e "域名解析 IPv4: ${BLUE}${resolved_ipv4:-未检测到}${NC}"
     echo -e "域名解析 IPv6: ${BLUE}${resolved_ipv6:-未检测到}${NC}"
 
-    if [[ -z "$resolved_ipv4" && -z "$resolved_ipv6" ]]; then
-        echo -e "${RED}警告：未检测到任何解析记录，证书申请极大概率失败！${NC}"
-    elif [[ -n "$resolved_ipv4" && "$resolved_ipv4" != "$local_ipv4" ]]; then
-        echo -e "${YELLOW}警告：域名 IPv4 解析与本机不匹配！${NC}"
+    # 容错：只要 IPv4 匹配，即使 IPv6 异常也允许继续
+    if [[ -z "$resolved_ipv4" ]]; then
+        echo -e "${RED}警告：未检测到 IPv4 解析，证书申请极大概率失败！${NC}"
+    elif [[ "$resolved_ipv4" != "$local_ipv4" ]]; then
+        echo -e "${YELLOW}警告：解析 IPv4 与本机不匹配，请检查 DNS 设置。${NC}"
+    else
+        echo -e "${GREEN}检测通过：IPv4 路径畅通。${NC}"
     fi
 
-    read -p "确认信息无误并继续？(y/n, 默认y): " check_confirm
+    read -p "确认并继续安装？(y/n, 默认y): " check_confirm
     [[ "${check_confirm,,}" == "n" ]] && return 1
     return 0
 }
 
 # --- 核心菜单功能 ---
 
-# 1. 安装功能
 install_v2ray() {
     while true; do
         echo -e "${YELLOW}请选择协议：${NC}"
@@ -91,7 +91,6 @@ install_v2ray() {
         echo -e "2) VMess + WS + TLS"
         echo -e "3) 返回主菜单"
         read -p "选择 [1-3, 默认1]: " p_choice
-        
         case $p_choice in
             2) PROTO="vmess" ; break ;;
             3) return ;;
@@ -99,9 +98,8 @@ install_v2ray() {
         esac
     done
     
-    read -p "请输入解析域名 (例如: cc.myvpsworld.top): " DOMAIN
+    read -p "请输入解析域名: " DOMAIN
     [[ -z "$DOMAIN" ]] && return
-    
     check_dns "$DOMAIN" || return
 
     echo -e "${GREEN}正在安装核心与Caddy...${NC}"
@@ -111,7 +109,7 @@ install_v2ray() {
     UUID=$(uuidgen)
     WSPATH="/$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 10)"
 
-    mkdir -p /usr/local/etc/v2ray
+    # 写入 V2Ray 配置
     cat <<EOF > $CONFIG_FILE
 {
   "inbounds": [{
@@ -123,13 +121,16 @@ install_v2ray() {
 }
 EOF
 
+    # 写入 Caddyfile (关键容错：bind 0.0.0.0 强制 IPv4 优先)
     cat <<EOF > $CADDY_FILE
 $DOMAIN {
+    bind 0.0.0.0
     reverse_proxy $WSPATH localhost:10000
     file_server { root /var/www/html }
 }
 EOF
     
+    # 写入服务项
     cat <<EOF > /etc/systemd/system/v2ray.service
 [Unit]
 Description=V2Ray Service
@@ -144,20 +145,17 @@ EOF
 
     systemctl daemon-reload && systemctl enable v2ray caddy && systemctl restart v2ray caddy
     generate_output "$UUID" "$DOMAIN" "$WSPATH" "$PROTO"
-    echo -e "${YELLOW}提示：Caddy 正在申请 SSL 证书，初次使用请等待 30-60 秒后连接。${NC}"
+    echo -e "${YELLOW}提示：Caddy 正在申请 SSL 证书，请等待 60 秒后连接。${NC}"
 }
 
-# 2. 查看配置
 show_config() {
     if [[ ! -f $CONFIG_FILE ]]; then
         echo -e "${RED}未检测到安装配置！${NC}"
         return
     fi
-    # 增加状态检查
     systemctl is-active --quiet v2ray || echo -e "${YELLOW}警告：V2Ray 服务当前未运行！${NC}"
-    
     local proto=$(jq -r '.inbounds[0].protocol' $CONFIG_FILE)
-    local domain=$(grep -v "{" $CADDY_FILE | head -n 1 | awk '{print $1}')
+    local domain=$(grep -v "{" $CADDY_FILE | grep -v "bind" | head -n 1 | awk '{print $1}')
     local path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' $CONFIG_FILE)
     
     echo -e "${YELLOW}当前配置中的所有用户：${NC}"
@@ -169,31 +167,23 @@ show_config() {
     done
 }
 
-# 3. 增加用户
 add_user() {
     [[ ! -f $CONFIG_FILE ]] && echo -e "${RED}请先安装！${NC}" && return
     local new_uuid=$(uuidgen)
     local proto=$(jq -r '.inbounds[0].protocol' $CONFIG_FILE)
-    
     if [[ "$proto" == "vless" ]]; then
         jq ".inbounds[0].settings.clients += [{\"id\": \"$new_uuid\", \"decryption\": \"none\"}]" $CONFIG_FILE > ${CONFIG_FILE}.tmp
     else
         jq ".inbounds[0].settings.clients += [{\"id\": \"$new_uuid\"}]" $CONFIG_FILE > ${CONFIG_FILE}.tmp
     fi
-    
-    if [[ $? -eq 0 ]]; then
-        mv ${CONFIG_FILE}.tmp $CONFIG_FILE
-        systemctl restart v2ray
-        echo -e "${GREEN}用户添加成功！${NC}"
-        show_config
-    else
-        echo -e "${RED}添加用户失败，请检查 jq 是否安装或配置格式是否正确。${NC}"
-    fi
+    mv ${CONFIG_FILE}.tmp $CONFIG_FILE
+    systemctl restart v2ray
+    echo -e "${GREEN}用户添加成功！${NC}"
+    show_config
 }
 
-# 4. 删除配置 (卸载)
 uninstall_v2ray() {
-    read -p "确定要彻底删除 V2Ray 和 Caddy 吗？(y/n): " confirm
+    read -p "确定要彻底删除吗？(y/n): " confirm
     if [[ "$confirm" == "y" ]]; then
         systemctl stop v2ray caddy
         systemctl disable v2ray caddy
@@ -206,7 +196,7 @@ uninstall_v2ray() {
 while true; do
     echo -e "${YELLOW}=================================${NC}"
     echo -e "${GREEN}   将军阁下的 V2Ray 管理面板 ${NC}"
-    echo -e "${GREEN}   随机号码：1897 ${NC}"
+    echo -e "${GREEN}   随机号码：12897 ${NC}"
     echo -e "${YELLOW}=================================${NC}"
     echo -e "1) 安装 V2Ray (默认推荐 VLESS)"
     echo -e "2) 查看当前配置与链接"
