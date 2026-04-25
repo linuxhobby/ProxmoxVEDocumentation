@@ -35,23 +35,26 @@ echo -e "${YELLOW}>>> 1. 正在设置时区...${NC}"
 timedatectl set-timezone Asia/Shanghai
 echo -e "${GREEN}>>> 时区已同步为 Asia/Shanghai，时间状态:$(date)${NC}"
 
-
 # 3. vnstat 配置
 echo -e "${YELLOW}>>> 3. 正在配置 vnstat...${NC}"
-IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
-echo -e "    检测到主网卡接口为: ${BOLD}${IFACE}${NC}"
-if [ -f /etc/vnstat.conf ]; then
-    sed -i "s/^Interface .*/Interface \"$IFACE\"/" /etc/vnstat.conf
-    vnstat --add -i "$IFACE" || true
-    systemctl enable vnstat --now
+IFACE=$(ip route | awk '/default/ {print $5; exit}')
+if [ -n "$IFACE" ]; then
+    echo -e "    检测到主网卡接口为: ${BOLD}${IFACE}${NC}"
+    if [ -f /etc/vnstat.conf ]; then
+        if grep -q '^Interface' /etc/vnstat.conf; then
+            sed -i "s|^Interface .*|Interface \"$IFACE\"|" /etc/vnstat.conf
+        else
+            echo "Interface \"$IFACE\"" >> /etc/vnstat.conf
+        fi
+    fi
+    vnstat --add -i "$IFACE" --force 2>/dev/null || true
+    systemctl enable vnstat
     systemctl restart vnstat
     echo -e "${GREEN}>>> vnstat 已绑定并启动。${NC}"
-else
-    echo -e "${RED}    警告: 未找到 /etc/vnstat.conf${NC}"
 fi
+
 
 echo -e "${BLUE}${BOLD}>>> 所有任务执行完毕，系统已配置完成。${NC}"
 
-# 3. vnstat 配置
 echo -e "${BLUE}${BOLD}>>> 下面开始执行v2ray一键安装脚本。${NC}"
 bash <(wget -qO- -o- https://github.com/233boy/v2ray/raw/master/install.sh)
