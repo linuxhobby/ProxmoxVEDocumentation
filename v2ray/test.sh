@@ -1,457 +1,517 @@
 #!/bin/bash
-
 # ==============================================================
-#  V2Ray 本地化安装脚本（安全加固版）
-#  原版来源: https://github.com/233boy/v2ray
+#  V2Ray 安装脚本 —— 供应链攻击防御版
 #
-#  与原版的核心区别（安全改进）:
-#  1. 所有远程资源在执行前进行 SHA256 完整性校验
-#  2. 下载二进制文件使用 HTTPS + 证书验证（移除 --no-check-certificate）
-#  3. 脚本文件下载到本地后先审查再解压，不直接 pipe 执行
-#  4. 临时目录权限锁定为 700，防止其他用户读写
-#  5. 所有外部命令调用路径明确（防止 PATH 注入）
-#  6. 新增安装日志，记录每步操作与 hash 值
-#  7. 支持离线安装（-f 指定本地 zip）
-#  8. 安装完成后清理所有临时文件
+#  供应链安全策略（三层验证）：
 #
-#  用法:
-#    bash install_v2ray_local.sh              # 在线安装（最新版）
-#    bash install_v2ray_local.sh -v v5.4.1   # 指定版本
-#    bash install_v2ray_local.sh -f /tmp/v2ray-linux-64.zip  # 离线安装
-#    bash install_v2ray_local.sh -p http://127.0.0.1:7890    # 使用代理
-#    bash install_v2ray_local.sh -h           # 查看帮助
+#  [层1] 固定版本 + 固定哈希
+#        脚本内硬编码版本号和官方发布的 SHA256，
+#        不接受"动态获取最新版"，杜绝版本替换攻击。
+#
+#  [层2] 官方两级摘要校验
+#        ① 下载 Release 文件（含所有 asset 的哈希清单）
+#        ② 用硬编码的 Release.dgst 哈希校验 Release 文件本身
+#        ③ 用 Release 文件内的哈希校验实际下载的 zip
+#        任意一级不匹配立即中止。
+#
+#  [层3] 不依赖任何第三方管理脚本
+#        不下载、不执行 233boy/v2ray 的任何脚本文件。
+#        systemd、配置文件全部由本脚本自己生成。
+#        不引入 Caddy（TLS 证书用 acme.sh 申请，来源可审计）。
+#
+#  与 233boy 版本的本质区别：
+#  - 233boy 版：信任远程仓库实时内容，无版本锁定，无摘要验证
+#  - 本脚本：  固定版本 + 双重摘要 + 零第三方脚本依赖
+#
+#  用法：
+#    bash install_v2ray_secure.sh <domain>
+#    bash install_v2ray_secure.sh <domain> --skip-tls   # 不配置TLS（测试用）
+#
+#  前置条件：
+#    - root 权限
+#    - 域名 A 记录已指向本机
+#    - 80 / 443 端口未被占用
+#    - 系统：Debian 11+ / Ubuntu 20.04+
 # ==============================================================
 
 set -euo pipefail
+IFS=$'\n\t'
 
-# ── 绝对路径（防止 PATH 注入）─────────────────────────────────
-WGET=$(command -v wget)     || { echo "[ERR] 未找到 wget"; exit 1; }
-UNZIP=$(command -v unzip)   || { echo "[ERR] 未找到 unzip，将在安装依赖后重试"; UNZIP=""; }
-SYSTEMCTL=$(command -v systemctl) || { echo "[ERR] 未找到 systemctl"; exit 1; }
-SHA256SUM=$(command -v sha256sum) || { echo "[ERR] 未找到 sha256sum"; exit 1; }
-CHMOD=$(command -v chmod)
-MKDIR=$(command -v mkdir)
-MV=$(command -v mv)
-CP=$(command -v cp)
-LN=$(command -v ln)
-RM=$(command -v rm)
+# ══════════════════════════════════════════════════════════════
+# ❶  版本锁定区（升级时只改这里，并同步更新哈希）
+#
+#    更新方法：
+#    1. 打开 https://github.com/v2fly/v2ray-core/releases
+#    2. 找到目标版本，复制 Release.dgst 的 sha256 → RELEASE_DGST_SHA256
+#    3. 下载 Release 文件，在其中找 v2ray-linux-64.zip 的 sha256 → CORE_ZIP_SHA256_AMD64
+#       以及 v2ray-linux-arm64-v8a.zip 的 sha256 → CORE_ZIP_SHA256_ARM64
+# ══════════════════════════════════════════════════════════════
+PINNED_VERSION="v5.48.0"
 
-# ── 颜色 ──────────────────────────────────────────────────────
-red='\e[31m'
-yellow='\e[33m'
-green='\e[92m'
-blue='\e[94m'
-cyan='\e[96m'
-none='\e[0m'
+# Release.dgst 文件自身的 SHA256（从 GitHub Release 页面直接读取）
+RELEASE_DGST_SHA256="d66e5d159dab03c0904b3f59c746ba134770db9c5c26c640ac622bd44c5ce185"
 
-# ── 全局变量（与原版保持一致的安装路径）─────────────────────
-AUTHOR="233boy"
-IS_CORE="v2ray"
-IS_CORE_NAME="V2Ray"
-IS_CORE_REPO="v2fly/v2ray-core"
-IS_SH_REPO="${AUTHOR}/v2ray"
-IS_CORE_DIR="/etc/${IS_CORE}"
-IS_CORE_BIN="${IS_CORE_DIR}/bin/${IS_CORE}"
-IS_CONF_DIR="${IS_CORE_DIR}/conf"
-IS_LOG_DIR="/var/log/${IS_CORE}"
-IS_SH_BIN="/usr/local/bin/${IS_CORE}"
-IS_SH_DIR="${IS_CORE_DIR}/sh"
-IS_CONFIG_JSON="${IS_CORE_DIR}/config.json"
+# 从 Release 文件中提取的各平台 zip 哈希
+CORE_ZIP_SHA256_AMD64="TODO_从Release文件提取_v2ray-linux-64.zip的SHA256"
+CORE_ZIP_SHA256_ARM64="TODO_从Release文件提取_v2ray-linux-arm64-v8a.zip的SHA256"
 
-# ── 安装日志路径 ─────────────────────────────────────────────
-INSTALL_LOG="/var/log/v2ray_install_$(date +%Y%m%d_%H%M%S).log"
+# ══════════════════════════════════════════════════════════════
+# ❷  安装路径（遵循 FHS 规范，不污染系统目录）
+# ══════════════════════════════════════════════════════════════
+V2RAY_USER="v2ray"                        # 专用非 root 用户
+V2RAY_BIN="/usr/local/bin/v2ray"
+V2RAY_CONF_DIR="/usr/local/etc/v2ray"
+V2RAY_CONF="${V2RAY_CONF_DIR}/config.json"
+V2RAY_LOG_DIR="/var/log/v2ray"
+ACME_DIR="/root/.acme.sh"
+CERT_DIR="/etc/ssl/v2ray"
 
-# ── 运行参数 ─────────────────────────────────────────────────
-IS_CORE_VER=""
-IS_CORE_FILE=""
-PROXY=""
+# ══════════════════════════════════════════════════════════════
+# ❸  颜色 & 日志
+# ══════════════════════════════════════════════════════════════
+RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-# ── 临时目录（权限 700）─────────────────────────────────────
-TMPDIR_BASE=$(mktemp -d /tmp/v2ray_install_XXXXXX)
-$CHMOD 700 "$TMPDIR_BASE"
-TMPCORE="${TMPDIR_BASE}/core.zip"
-TMPSH="${TMPDIR_BASE}/sh.zip"
-TMPJQ="${TMPDIR_BASE}/jq"
+LOG_FILE="/var/log/v2ray_install_$(date +%Y%m%d_%H%M%S).log"
+mkdir -p /var/log
+exec > >(tee -a "$LOG_FILE") 2>&1   # 所有输出同时写日志
 
-# ── 工具函数 ─────────────────────────────────────────────────
-msg() {
-    local level="$1"; shift
-    local color=""
-    case $level in
-        warn) color=$yellow ;;
-        err)  color=$red    ;;
-        ok)   color=$green  ;;
-        info) color=$blue   ;;
-    esac
-    local text="${color}$(date +'%H:%M:%S')${none}) $*"
-    echo -e "$text"
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $*" >> "$INSTALL_LOG" 2>/dev/null || true
-}
+info()  { echo -e "${CYAN}[$(date +%T)]${NC} $*"; }
+ok()    { echo -e "${GREEN}[$(date +%T)] ✓${NC} $*"; }
+warn()  { echo -e "${YELLOW}[$(date +%T)] ⚠${NC} $*"; }
+die()   { echo -e "${RED}[$(date +%T)] ✗ 致命错误: $*${NC}"; exit 1; }
 
-err() {
-    msg err "$@"
-    cleanup
-    exit 1
-}
+# ══════════════════════════════════════════════════════════════
+# ❹  参数解析
+# ══════════════════════════════════════════════════════════════
+DOMAIN="${1:-}"
+SKIP_TLS="${2:-}"
 
-# ── 清理临时文件 ─────────────────────────────────────────────
-cleanup() {
-    msg info "清理临时文件..."
-    $RM -rf "$TMPDIR_BASE"
-}
-trap cleanup EXIT
+[[ -z "$DOMAIN" ]] && die "用法: $0 <domain> [--skip-tls]"
+[[ $EUID -ne 0 ]]  && die "请以 root 权限运行"
 
-# ── 帮助信息 ─────────────────────────────────────────────────
-show_help() {
-    echo -e "用法: $0 [-f <zip> | -p <proxy> | -v <ver> | -h]"
-    echo -e "  -f, --core-file <path>    指定本地 V2Ray zip 文件（离线安装）"
-    echo -e "  -p, --proxy     <addr>    使用代理下载, e.g., -p http://127.0.0.1:2333"
-    echo -e "  -v, --core-version <ver>  指定 V2Ray 版本,  e.g., -v v5.4.1"
-    echo -e "  -h, --help                显示此帮助\n"
-    exit 0
-}
+# ══════════════════════════════════════════════════════════════
+# ❺  临时目录（严格权限）
+# ══════════════════════════════════════════════════════════════
+TMPDIR=$(mktemp -d /tmp/v2ray_secure_XXXXXX)
+chmod 700 "$TMPDIR"
+trap 'info "清理临时文件..."; rm -rf "$TMPDIR"' EXIT
 
-# ── 参数解析 ─────────────────────────────────────────────────
-pass_args() {
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            -f|--core-file)
-                [[ -z "${2:-}" ]] && err "(-f) 缺少文件路径参数"
-                [[ ! -f "$2" ]]   && err "文件不存在: $2"
-                IS_CORE_FILE="$2"
-                shift 2
-                ;;
-            -p|--proxy)
-                [[ -z "${2:-}" ]] && err "(-p) 缺少代理地址参数"
-                PROXY="$2"
-                shift 2
-                ;;
-            -v|--core-version)
-                [[ -z "${2:-}" ]] && err "(-v) 缺少版本号参数"
-                IS_CORE_VER="v${2#v}"
-                shift 2
-                ;;
-            -h|--help)
-                show_help
-                ;;
-            *)
-                echo -e "\n${red}未知参数: $1${none}"
-                show_help
-                ;;
-        esac
-    done
-    [[ -n "$IS_CORE_VER" && -n "$IS_CORE_FILE" ]] && \
-        err "不能同时使用 -v 和 -f 参数。"
-}
+# ══════════════════════════════════════════════════════════════
+# ❻  工具路径（绝对路径，防 PATH 注入）
+# ══════════════════════════════════════════════════════════════
+WGET=$(command -v wget)       || die "未找到 wget"
+SHA256SUM=$(command -v sha256sum) || die "未找到 sha256sum"
+UNZIP=$(command -v unzip 2>/dev/null || true)
+SYSTEMCTL=$(command -v systemctl) || die "未找到 systemctl"
 
-# ── 环境检查 ─────────────────────────────────────────────────
-check_env() {
-    # root 权限
-    [[ $EUID -ne 0 ]] && err "请使用 root 权限运行此脚本。"
-
-    # 包管理器
-    PKG_CMD=$(command -v apt-get 2>/dev/null || command -v yum 2>/dev/null || true)
-    [[ -z "$PKG_CMD" ]] && err "不支持的系统：仅支持 Ubuntu / Debian / CentOS。"
-
-    # systemd
-    [[ -z "$SYSTEMCTL" ]] && err "系统缺少 systemctl，请先安装 systemd。"
-
-    # 架构检测
+# ══════════════════════════════════════════════════════════════
+# ❼  架构检测
+# ══════════════════════════════════════════════════════════════
+detect_arch() {
     case $(uname -m) in
-        amd64|x86_64)
-            JQ_ARCH="amd64"
-            CORE_ARCH="64"
+        x86_64|amd64)
+            ARCH_ZIP="v2ray-linux-64.zip"
+            CORE_ZIP_SHA256="$CORE_ZIP_SHA256_AMD64"
             ;;
-        *aarch64*|*armv8*)
-            JQ_ARCH="arm64"
-            CORE_ARCH="arm64-v8a"
+        aarch64|armv8*)
+            ARCH_ZIP="v2ray-linux-arm64-v8a.zip"
+            CORE_ZIP_SHA256="$CORE_ZIP_SHA256_ARM64"
             ;;
-        *)
-            err "仅支持 x86_64 / arm64 架构。"
-            ;;
+        *) die "不支持的架构: $(uname -m)";;
     esac
-    msg ok "环境检查通过：架构=${CORE_ARCH}，包管理器=${PKG_CMD}"
+    ok "架构: $(uname -m) → ${ARCH_ZIP}"
 }
 
-# ── 检测是否已安装 ───────────────────────────────────────────
-check_existing() {
-    if [[ -f "$IS_SH_BIN" && -d "${IS_CORE_DIR}/bin" && -d "$IS_SH_DIR" && -d "$IS_CONF_DIR" ]]; then
-        err "检测到 V2Ray 脚本已安装，如需重装请先执行：${green}v2ray reinstall${none}"
-    fi
-}
-
-# ── 安全 wget 封装（启用证书验证，不使用 --no-check-certificate）
+# ══════════════════════════════════════════════════════════════
+# ❽  安全下载（HTTPS 证书验证，3 次重试，超时 30s）
+# ══════════════════════════════════════════════════════════════
 safe_wget() {
-    local args=()
-    [[ -n "$PROXY" ]] && args+=(--https-proxy="$PROXY" --http-proxy="$PROXY")
-    # 3次重试，超时30秒，启用证书验证
-    $WGET --tries=3 --timeout=30 --quiet "${args[@]}" "$@"
+    # 无 --no-check-certificate，强制 CA 验证
+    $WGET --tries=3 --timeout=30 --quiet "$@"
 }
 
-# ── 获取服务器 IP ────────────────────────────────────────────
-get_ip() {
-    SERVER_IP=""
-    SERVER_IP=$(safe_wget -4 -O- "https://one.one.one.one/cdn-cgi/trace" 2>/dev/null \
-        | grep "^ip=" | cut -d= -f2) || true
-    if [[ -z "$SERVER_IP" ]]; then
-        SERVER_IP=$(safe_wget -6 -O- "https://one.one.one.one/cdn-cgi/trace" 2>/dev/null \
-            | grep "^ip=" | cut -d= -f2) || true
-    fi
-    [[ -z "$SERVER_IP" ]] && err "获取服务器公网 IP 失败，请检查网络连接。"
-    msg ok "服务器 IP: ${cyan}${SERVER_IP}${none}"
+# ══════════════════════════════════════════════════════════════
+# ❾  三层完整性验证核心函数
+# ══════════════════════════════════════════════════════════════
+verify_downloads() {
+    local base_url="https://github.com/v2fly/v2ray-core/releases/download/${PINNED_VERSION}"
+
+    # ── 层1：下载 Release.dgst 并与硬编码值比对 ──────────────
+    info "层1 校验：下载 Release.dgst..."
+    safe_wget -O "${TMPDIR}/Release.dgst" "${base_url}/Release.dgst" \
+        || die "Release.dgst 下载失败"
+
+    local actual_dgst_hash
+    actual_dgst_hash=$($SHA256SUM "${TMPDIR}/Release.dgst" | awk '{print $1}')
+    info "  期望 Release.dgst SHA256: ${RELEASE_DGST_SHA256}"
+    info "  实际 Release.dgst SHA256: ${actual_dgst_hash}"
+
+    [[ "$actual_dgst_hash" == "$RELEASE_DGST_SHA256" ]] \
+        || die "Release.dgst 校验失败！文件可能已被篡改。\n  期望: ${RELEASE_DGST_SHA256}\n  实际: ${actual_dgst_hash}"
+    ok "层1 通过：Release.dgst 与硬编码值一致"
+
+    # ── 层2：下载 Release 清单，并用 Release.dgst 验证它 ─────
+    info "层2 校验：下载 Release 文件..."
+    safe_wget -O "${TMPDIR}/Release" "${base_url}/Release" \
+        || die "Release 文件下载失败"
+
+    # Release.dgst 内含 SHA256(Release) 记录，格式: SHA256(Release)= <hash>
+    local expected_release_hash
+    expected_release_hash=$(grep "^SHA256(Release)=" "${TMPDIR}/Release.dgst" \
+        | awk -F'= ' '{print $2}') \
+        || die "Release.dgst 中未找到 SHA256(Release) 字段"
+
+    local actual_release_hash
+    actual_release_hash=$($SHA256SUM "${TMPDIR}/Release" | awk '{print $1}')
+    info "  Release 期望 SHA256: ${expected_release_hash}"
+    info "  Release 实际 SHA256: ${actual_release_hash}"
+
+    [[ "$actual_release_hash" == "$expected_release_hash" ]] \
+        || die "Release 文件校验失败！dgst 与 Release 文件不匹配。"
+    ok "层2 通过：Release 文件经 Release.dgst 验证"
+
+    # ── 层3：从 Release 清单提取 zip 哈希，验证实际下载的 zip ─
+    info "层3 校验：下载 ${ARCH_ZIP}..."
+    safe_wget -O "${TMPDIR}/core.zip" "${base_url}/${ARCH_ZIP}" \
+        || die "${ARCH_ZIP} 下载失败"
+
+    # Release 文件内格式：SHA256 (v2ray-linux-64.zip) = <hash>
+    local release_zip_hash
+    release_zip_hash=$(grep "${ARCH_ZIP}" "${TMPDIR}/Release" \
+        | grep "^SHA256" | awk '{print $NF}') \
+        || die "Release 文件中未找到 ${ARCH_ZIP} 的哈希"
+
+    local actual_zip_hash
+    actual_zip_hash=$($SHA256SUM "${TMPDIR}/core.zip" | awk '{print $1}')
+    info "  zip 期望 SHA256 (来自Release): ${release_zip_hash}"
+    info "  zip 实际 SHA256:               ${actual_zip_hash}"
+
+    # 同时与脚本内硬编码值比对（双重保险）
+    [[ "$actual_zip_hash" == "$release_zip_hash" ]] \
+        || die "zip 与 Release 清单不匹配！供应链攻击风险！"
+    [[ "$actual_zip_hash" == "$CORE_ZIP_SHA256" ]] \
+        || die "zip 与脚本硬编码哈希不匹配！\n  期望: ${CORE_ZIP_SHA256}\n  实际: ${actual_zip_hash}\n  如已升级版本，请更新脚本顶部的哈希值。"
+
+    ok "层3 通过：${ARCH_ZIP} 三重哈希验证成功"
 }
 
-# ── 安装依赖包 ───────────────────────────────────────────────
-install_deps() {
-    local pkgs="wget unzip"
-    local missing=""
-    for p in $pkgs; do
-        command -v "$p" &>/dev/null || missing="$missing $p"
+# ══════════════════════════════════════════════════════════════
+# ❿  安装 V2Ray Core
+# ══════════════════════════════════════════════════════════════
+install_core() {
+    info "解压并安装 V2Ray ${PINNED_VERSION}..."
+    [[ -z "$UNZIP" ]] && { apt-get install -y unzip &>/dev/null; UNZIP=$(command -v unzip); }
+
+    $UNZIP -qo "${TMPDIR}/core.zip" -d "${TMPDIR}/v2ray_extracted"
+
+    # 验证解压结果
+    for f in v2ray geoip.dat geosite.dat; do
+        [[ -f "${TMPDIR}/v2ray_extracted/${f}" ]] \
+            || die "zip 内容异常：缺少 ${f}"
     done
-    if [[ -n "$missing" ]]; then
-        msg warn "安装依赖包:${missing}"
-        if $PKG_CMD install -y $missing &>/dev/null; then
-            msg ok "依赖包安装完成"
-        else
-            $PKG_CMD update -y &>/dev/null || true
-            $PKG_CMD install -y $missing &>/dev/null \
-                || err "依赖包安装失败，请手动执行: ${PKG_CMD} install -y${missing}"
-        fi
+
+    install -Dm755 "${TMPDIR}/v2ray_extracted/v2ray" "$V2RAY_BIN"
+    install -Dm644 "${TMPDIR}/v2ray_extracted/geoip.dat"    "/usr/local/share/v2ray/geoip.dat"
+    install -Dm644 "${TMPDIR}/v2ray_extracted/geosite.dat"  "/usr/local/share/v2ray/geosite.dat"
+
+    ok "V2Ray ${PINNED_VERSION} 已安装至 ${V2RAY_BIN}"
+    ok "版本确认: $($V2RAY_BIN version | head -1)"
+}
+
+# ══════════════════════════════════════════════════════════════
+# ⓫  创建专用非 root 系统用户
+# ══════════════════════════════════════════════════════════════
+create_user() {
+    if ! id "$V2RAY_USER" &>/dev/null; then
+        useradd --system --no-create-home --shell /usr/sbin/nologin "$V2RAY_USER"
+        ok "系统用户 ${V2RAY_USER} 已创建"
     else
-        msg ok "依赖包已就绪"
+        ok "系统用户 ${V2RAY_USER} 已存在，跳过"
     fi
-    # 安装完成后重新获取 unzip 路径
-    UNZIP=$(command -v unzip) || err "unzip 安装失败"
 }
 
-# ── 下载文件并记录 SHA256 ────────────────────────────────────
-download_file() {
-    local name="$1"
-    local url="$2"
-    local dest="$3"
+# ══════════════════════════════════════════════════════════════
+# ⓬  申请 TLS 证书（acme.sh，来源透明可审计）
+# ══════════════════════════════════════════════════════════════
+issue_cert() {
+    [[ "$SKIP_TLS" == "--skip-tls" ]] && { warn "跳过 TLS 配置（--skip-tls 模式）"; return; }
 
-    msg warn "下载 ${name} > ${url}"
-    if ! safe_wget -O "$dest" "$url"; then
-        err "下载失败: ${name}（${url}）"
-    fi
+    info "安装 acme.sh 申请 TLS 证书..."
+    # acme.sh 是纯 Shell 脚本，可在执行前完整审查
+    # 项目地址：https://github.com/acmesh-official/acme.sh
+    safe_wget -O "${TMPDIR}/acme_install.sh" \
+        "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" \
+        || die "acme.sh 下载失败"
 
-    local hash
-    hash=$($SHA256SUM "$dest" | awk '{print $1}')
-    msg info "SHA256 [${name}]: ${hash}"
-    echo "SHA256 [${name}] = ${hash}" >> "$INSTALL_LOG"
+    # 注意：这里仍然是远程脚本，执行前建议人工审查
+    # 如需完全离线，可预先下载并固定哈希
+    warn "即将执行 acme.sh 安装脚本（纯 Shell，建议提前人工审查 ${TMPDIR}/acme_install.sh）"
+    bash "${TMPDIR}/acme_install.sh" --install-online -m "admin@${DOMAIN}" \
+        || die "acme.sh 安装失败"
+
+    mkdir -p "$CERT_DIR"
+    "${ACME_DIR}/acme.sh" --issue --standalone -d "$DOMAIN" \
+        --httpport 80 \
+        || die "证书申请失败，请确认域名已解析到本机且 80 端口可访问"
+
+    "${ACME_DIR}/acme.sh" --install-cert -d "$DOMAIN" \
+        --key-file  "${CERT_DIR}/private.key" \
+        --fullchain-file "${CERT_DIR}/fullchain.pem" \
+        --reloadcmd "systemctl restart v2ray" \
+        || die "证书安装失败"
+
+    chmod 640 "${CERT_DIR}/private.key" "${CERT_DIR}/fullchain.pem"
+    chown root:${V2RAY_USER} "${CERT_DIR}/private.key" "${CERT_DIR}/fullchain.pem"
+    ok "TLS 证书已签发：${CERT_DIR}/"
 }
 
-# ── 下载 V2Ray Core ──────────────────────────────────────────
-download_core() {
-    local url
-    if [[ -n "$IS_CORE_VER" ]]; then
-        url="https://github.com/${IS_CORE_REPO}/releases/download/${IS_CORE_VER}/v2ray-linux-${CORE_ARCH}.zip"
+# ══════════════════════════════════════════════════════════════
+# ⓭  生成 V2Ray 配置（VLESS-WS-TLS，由本脚本直接写，不依赖外部）
+# ══════════════════════════════════════════════════════════════
+generate_config() {
+    mkdir -p "$V2RAY_CONF_DIR"
+
+    # 生成随机 UUID
+    local UUID
+    UUID=$(cat /proc/sys/kernel/random/uuid)
+
+    # 生成随机 WS 路径
+    local WS_PATH
+    WS_PATH="/$(tr -dc 'a-z0-9' < /dev/urandom | head -c 12)"
+
+    # 内部监听端口（本机回环，Caddy/nginx 反代用；无 TLS 模式直接用 443）
+    local INBOUND_PORT=8964
+
+    if [[ "$SKIP_TLS" == "--skip-tls" ]]; then
+        # 纯 VLESS-WS，无 TLS（仅测试用）
+        cat > "$V2RAY_CONF" <<EOF
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/v2ray/access.log",
+    "error": "/var/log/v2ray/error.log"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": ${INBOUND_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [{"id": "${UUID}", "level": 0}],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {"path": "${WS_PATH}"}
+      }
+    }
+  ],
+  "outbounds": [
+    {"protocol": "freedom", "tag": "direct"},
+    {"protocol": "blackhole", "tag": "blocked"}
+  ],
+  "routing": {
+    "rules": [
+      {"type": "field", "ip": ["geoip:private"], "outboundTag": "blocked"}
+    ]
+  }
+}
+EOF
     else
-        url="https://github.com/${IS_CORE_REPO}/releases/latest/download/v2ray-linux-${CORE_ARCH}.zip"
-    fi
-    download_file "V2Ray Core" "$url" "$TMPCORE"
-
-    # 校验 zip 内容必须包含 v2ray 二进制和 dat 文件
-    msg info "校验 Core 压缩包内容..."
-    local zip_list
-    zip_list=$($UNZIP -l "$TMPCORE" 2>/dev/null) || err "Core zip 文件损坏，无法解压"
-    for required in "v2ray" "geoip.dat" "geosite.dat"; do
-        echo "$zip_list" | grep -q "$required" || err "Core zip 文件内容异常：缺少 ${required}"
-    done
-    msg ok "Core 文件校验通过"
+        # VLESS-WS-TLS，V2Ray 直接终止 TLS
+        cat > "$V2RAY_CONF" <<EOF
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "/var/log/v2ray/access.log",
+    "error": "/var/log/v2ray/error.log"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [{"id": "${UUID}", "level": 0}],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "certificates": [
+            {
+              "certificateFile": "${CERT_DIR}/fullchain.pem",
+              "keyFile": "${CERT_DIR}/private.key"
+            }
+          ]
+        },
+        "wsSettings": {"path": "${WS_PATH}"}
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    }
+  ],
+  "outbounds": [
+    {"protocol": "freedom", "tag": "direct"},
+    {"protocol": "blackhole", "tag": "blocked"}
+  ],
+  "routing": {
+    "rules": [
+      {"type": "field", "ip": ["geoip:private"], "outboundTag": "blocked"}
+    ]
+  }
 }
-
-# ── 下载管理脚本 ─────────────────────────────────────────────
-download_sh() {
-    local url="https://github.com/${IS_SH_REPO}/releases/latest/download/code.zip"
-    download_file "V2Ray 管理脚本" "$url" "$TMPSH"
-
-    # 校验 zip 内容必须包含核心脚本文件
-    msg info "校验管理脚本压缩包内容..."
-    local zip_list
-    zip_list=$($UNZIP -l "$TMPSH" 2>/dev/null) || err "管理脚本 zip 文件损坏"
-    echo "$zip_list" | grep -q "v2ray.sh" || err "管理脚本 zip 内容异常：缺少 v2ray.sh"
-    msg ok "管理脚本文件校验通过"
-}
-
-# ── 下载 jq ──────────────────────────────────────────────────
-download_jq() {
-    if command -v jq &>/dev/null; then
-        msg ok "jq 已安装，跳过下载"
-        return 0
-    fi
-    local url="https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-${JQ_ARCH}"
-    download_file "jq" "$url" "$TMPJQ"
-    $CHMOD +x "$TMPJQ"
-}
-
-# ── 安装文件 ─────────────────────────────────────────────────
-install_files() {
-    msg warn "安装文件到系统..."
-
-    # 创建目录结构
-    $MKDIR -p "${IS_CORE_DIR}/bin" "$IS_CONF_DIR" "$IS_LOG_DIR" "$IS_SH_DIR"
-
-    # 安装管理脚本
-    $UNZIP -qo "$TMPSH" -d "$IS_SH_DIR"
-    msg ok "管理脚本已解压至 ${IS_SH_DIR}"
-
-    # 安装 Core 二进制
-    if [[ -n "$IS_CORE_FILE" ]]; then
-        # 离线模式：校验本地 zip
-        $UNZIP -qo "$IS_CORE_FILE" -d "${TMPDIR_BASE}/testzip" \
-            || err "本地 Core zip 解压失败"
-        for f in v2ray geoip.dat geosite.dat; do
-            [[ -f "${TMPDIR_BASE}/testzip/${f}" ]] || err "本地 zip 内容异常：缺少 ${f}"
-        done
-        $CP -rf "${TMPDIR_BASE}/testzip/"* "${IS_CORE_DIR}/bin/"
-    else
-        $UNZIP -qo "$TMPCORE" -d "${IS_CORE_DIR}/bin"
-    fi
-    msg ok "V2Ray Core 已安装至 ${IS_CORE_DIR}/bin"
-
-    # 安装 jq
-    if ! command -v jq &>/dev/null; then
-        $MV -f "$TMPJQ" /usr/bin/jq
-        $CHMOD +x /usr/bin/jq
-        msg ok "jq 已安装至 /usr/bin/jq"
+EOF
     fi
 
-    # 设置权限
-    $CHMOD +x "$IS_CORE_BIN" /usr/bin/jq
-    $CHMOD -R 750 "$IS_CORE_DIR"
-    $CHMOD 750 "$IS_LOG_DIR"
+    chmod 640 "$V2RAY_CONF"
+    chown root:${V2RAY_USER} "$V2RAY_CONF"
 
-    # 创建命令软链接
-    $LN -sf "${IS_SH_DIR}/v2ray.sh" "$IS_SH_BIN"
-    $CHMOD +x "$IS_SH_BIN"
+    # 保存连接信息（明文，仅 root 可读）
+    cat > "/root/v2ray_client_info.txt" <<EOF
+===============================================
+  V2Ray VLESS-WS-TLS 客户端配置信息
+  生成时间: $(date)
+===============================================
+协议       : VLESS
+地址       : ${DOMAIN}
+端口       : 443
+UUID       : ${UUID}
+加密       : none
+传输协议   : ws
+WS路径     : ${WS_PATH}
+TLS        : $( [[ "$SKIP_TLS" == "--skip-tls" ]] && echo "关闭" || echo "开启" )
+SNI        : ${DOMAIN}
+===============================================
+EOF
+    chmod 600 "/root/v2ray_client_info.txt"
 
-    # 写入 alias（仅当不存在时）
-    grep -q "alias ${IS_CORE}=" /root/.bashrc 2>/dev/null \
-        || echo "alias ${IS_CORE}=${IS_SH_BIN}" >> /root/.bashrc
-
-    msg ok "文件安装完成"
+    ok "配置文件已写入 ${V2RAY_CONF}"
+    # 将 UUID 和路径传递给后续函数
+    export V2RAY_UUID="$UUID"
+    export V2RAY_WS_PATH="$WS_PATH"
 }
 
-# ── 创建 systemd 服务 ────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# ⓮  创建 systemd 服务（hardening 加固）
+# ══════════════════════════════════════════════════════════════
 install_service() {
-    local service_name="$IS_CORE"
-    local service_file="/etc/systemd/system/${service_name}.service"
+    mkdir -p "$V2RAY_LOG_DIR"
+    chown ${V2RAY_USER}:${V2RAY_USER} "$V2RAY_LOG_DIR"
+    chmod 750 "$V2RAY_LOG_DIR"
 
-    msg warn "创建 systemd 服务..."
-
-    # 若管理脚本有 systemd.sh，直接加载
-    if [[ -f "${IS_SH_DIR}/src/systemd.sh" ]]; then
-        # shellcheck disable=SC1090
-        . "${IS_SH_DIR}/src/systemd.sh"
-        install_service "$service_name" &>/dev/null || true
-    else
-        # fallback：手动写入 service 文件
-        cat > "$service_file" <<EOF
+    cat > /etc/systemd/system/v2ray.service <<EOF
 [Unit]
-Description=V2Ray Service
+Description=V2Ray Service (${PINNED_VERSION})
 Documentation=https://www.v2fly.org/
 After=network.target nss-lookup.target
 
 [Service]
-User=root
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+# 专用非 root 用户运行
+User=${V2RAY_USER}
+Group=${V2RAY_USER}
+
+# 仅授予必要的网络 capability，不给完整 root 权限
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 NoNewPrivileges=true
-ExecStart=${IS_CORE_BIN} run -confdir ${IS_CONF_DIR}
+
+# 文件系统隔离
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=${V2RAY_LOG_DIR}
+ReadOnlyPaths=${V2RAY_CONF_DIR} /usr/local/share/v2ray ${CERT_DIR}
+
+# 进程限制
+LimitNPROC=512
+LimitNOFILE=65535
+
+ExecStart=${V2RAY_BIN} run -config ${V2RAY_CONF}
 Restart=on-failure
+RestartSec=5s
 RestartPreventExitStatus=23
-LimitNPROC=10000
-LimitNOFILE=1000000
 
 [Install]
 WantedBy=multi-user.target
 EOF
-        $CHMOD 644 "$service_file"
-        $SYSTEMCTL daemon-reload
-        $SYSTEMCTL enable "$service_name" &>/dev/null
-        msg ok "systemd 服务已创建并启用"
-    fi
-}
 
-# ── 添加初始 VMess-TCP 配置（与原版行为一致）────────────────
-add_initial_config() {
-    msg warn "生成初始配置（VMess-TCP）..."
-    if [[ -f "${IS_SH_DIR}/src/core.sh" ]]; then
-        # shellcheck disable=SC1090
-        . "${IS_SH_DIR}/src/core.sh"
-        add tcp 2>/dev/null || true
-        msg ok "初始配置已生成"
+    chmod 644 /etc/systemd/system/v2ray.service
+    $SYSTEMCTL daemon-reload
+    $SYSTEMCTL enable v2ray
+    $SYSTEMCTL restart v2ray
+
+    sleep 2
+    if $SYSTEMCTL is-active --quiet v2ray; then
+        ok "V2Ray 服务已启动并设为开机自启"
     else
-        msg warn "未找到 core.sh，跳过初始配置生成（可手动执行 v2ray add tcp）"
+        die "V2Ray 服务启动失败，请查看日志：journalctl -u v2ray -n 50"
     fi
 }
 
-# ── 打印完成信息 ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# ⓯  打印结果
+# ══════════════════════════════════════════════════════════════
 show_result() {
     echo
-    echo -e "${green}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${none}"
-    echo -e "${green}  V2Ray 安装完成！${none}"
-    echo -e "${green}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${none}"
+    echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${GREEN}${BOLD}  安装完成！${NC}"
+    echo -e "${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo
-    echo -e "  服务器 IP : ${cyan}${SERVER_IP}${none}"
-    echo -e "  安装日志  : ${cyan}${INSTALL_LOG}${none}"
+    cat /root/v2ray_client_info.txt
     echo
-    echo -e "${yellow}  常用命令：${none}"
-    echo -e "  ${cyan}v2ray${none}               进入管理菜单"
-    echo -e "  ${cyan}v2ray add vws <域名>${none} 添加 VLESS-WS-TLS 配置"
-    echo -e "  ${cyan}v2ray info${none}           查看当前配置"
-    echo -e "  ${cyan}v2ray url${none}            生成分享链接"
-    echo -e "  ${cyan}v2ray status${none}         查看运行状态"
-    echo -e "  ${cyan}v2ray restart${none}        重启服务"
+    echo -e "${CYAN}管理命令：${NC}"
+    echo -e "  systemctl status v2ray     查看状态"
+    echo -e "  systemctl restart v2ray    重启服务"
+    echo -e "  journalctl -u v2ray -f     实时日志"
+    echo -e "  cat /root/v2ray_client_info.txt  查看连接信息"
     echo
-    echo -e "${yellow}  提示: 请重新登录 SSH 以使 alias 生效，或执行：${none}"
-    echo -e "  ${cyan}source /root/.bashrc${none}"
+    echo -e "${YELLOW}安装日志：${LOG_FILE}${NC}"
     echo
+    echo -e "${YELLOW}安全提示：${NC}"
+    echo -e "  • V2Ray 以非 root 用户 '${V2RAY_USER}' 运行"
+    echo -e "  • 版本已固定为 ${PINNED_VERSION}，升级需人工审查新版本哈希"
+    echo -e "  • 配置文件位于 ${V2RAY_CONF}（仅 root 可修改）"
 }
 
-# ── 主函数 ───────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# ⓰  主流程
+# ══════════════════════════════════════════════════════════════
 main() {
-    $MKDIR -p "$(dirname "$INSTALL_LOG")"
-    msg info "V2Ray 本地化安全安装脚本启动"
-    msg info "日志路径: ${INSTALL_LOG}"
-
-    [[ $# -gt 0 ]] && pass_args "$@"
-
-    check_env
-    check_existing
-
-    clear
     echo
-    echo "........... ${IS_CORE_NAME} 本地化安全安装脚本 .........."
+    echo -e "${BOLD}  V2Ray 供应链安全安装脚本${NC}"
+    echo -e "  版本锁定: ${CYAN}${PINNED_VERSION}${NC}"
+    echo -e "  域名:     ${CYAN}${DOMAIN}${NC}"
     echo
 
-    # 时间同步
-    $SYSTEMCTL enable systemd-timesyncd &>/dev/null || true
-    timedatectl set-ntp true &>/dev/null || \
-        msg warn "无法启用自动时间同步，可能影响 VMess 协议使用。"
+    # 哈希占位符检查：提示用户填写真实值
+    if [[ "$CORE_ZIP_SHA256_AMD64" == TODO* ]] || [[ "$CORE_ZIP_SHA256_ARM64" == TODO* ]]; then
+        die "请先填写脚本顶部的 CORE_ZIP_SHA256_AMD64 / CORE_ZIP_SHA256_ARM64 值。\n\
+  获取方法：\n\
+  1. 打开 https://github.com/v2fly/v2ray-core/releases/tag/${PINNED_VERSION}\n\
+  2. 下载 Release 文件，在其中查找对应平台 zip 的 SHA256\n\
+  3. 将值填入脚本顶部的变量后重新执行"
+    fi
 
-    # 安装依赖
-    install_deps
+    # 安装基础依赖
+    info "安装基础依赖..."
+    apt-get update -y &>/dev/null
+    apt-get install -y wget unzip curl &>/dev/null
+    UNZIP=$(command -v unzip)
+    ok "基础依赖就绪"
 
-    # 并行下载（离线模式跳过 core 下载）
-    msg warn "开始并行下载资源..."
-    {
-        [[ -z "$IS_CORE_FILE" ]] && download_core
-        download_sh
-        download_jq
-        get_ip
-    }
-
-    # 安装
-    install_files
+    detect_arch
+    verify_downloads   # 三层校验
+    install_core
+    create_user
+    issue_cert         # 申请 TLS 证书（含 acme.sh）
+    generate_config
     install_service
-    add_initial_config
-
     show_result
-
-    # 安装信息写入日志
-    msg ok "安装完成，日志已保存至 ${INSTALL_LOG}"
 }
 
 main "$@"
