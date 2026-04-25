@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# 将军阁下的专属 V2Ray 综合管理脚本
+# 将军阁下的专属 V2Ray 综合管理脚本 (VLESS 默认增强版)
 # 功能：安装、查看、增加用户、彻底卸载
 # ====================================================
 
@@ -54,11 +54,19 @@ EOF
 
 # 1. 安装功能
 install_v2ray() {
-    echo -e "${YELLOW}请选择协议：1) vless (推荐)  2) vmess${NC}"
-    read -p "选择 [1-2]: " p_choice
-    [[ "$p_choice" == "2" ]] && PROTO="vmess" || PROTO="vless"
+    echo -e "${YELLOW}请选择协议 (直接回车默认选择 VLESS)：${NC}"
+    echo -e "1) VLESS + WS + TLS (推荐)"
+    echo -e "2) VMess + WS + TLS"
+    read -p "选择 [1-2, 默认1]: " p_choice
     
-    read -p "请输入域名: " DOMAIN
+    # 强化默认逻辑：除非明确输入 2，否则一律视为 vless
+    if [[ "$p_choice" == "2" ]]; then
+        PROTO="vmess"
+    else
+        PROTO="vless"
+    fi
+    
+    read -p "请输入解析域名 (例如: cc.myvpsworld.top): " DOMAIN
     [[ -z "$DOMAIN" ]] && return
 
     echo -e "${GREEN}正在安装核心与Caddy...${NC}"
@@ -87,7 +95,6 @@ $DOMAIN {
 }
 EOF
     
-    # 强制创建服务文件
     cat <<EOF > /etc/systemd/system/v2ray.service
 [Unit]
 Description=V2Ray Service
@@ -111,6 +118,7 @@ show_config() {
         return
     fi
     local proto=$(jq -r '.inbounds[0].protocol' $CONFIG_FILE)
+    # 兼容从 Caddyfile 提取域名
     local domain=$(grep -v "{" $CADDY_FILE | head -n 1 | awk '{print $1}')
     local path=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' $CONFIG_FILE)
     
@@ -127,7 +135,16 @@ show_config() {
 add_user() {
     [[ ! -f $CONFIG_FILE ]] && echo -e "${RED}请先安装！${NC}" && return
     local new_uuid=$(uuidgen)
-    jq ".inbounds[0].settings.clients += [{\"id\": \"$new_uuid\" $(jq -r '.inbounds[0].protocol' $CONFIG_FILE | grep -q vless && echo ',"decryption": "none"') }]" $CONFIG_FILE > ${CONFIG_FILE}.tmp && mv ${CONFIG_FILE}.tmp $CONFIG_FILE
+    local proto=$(jq -r '.inbounds[0].protocol' $CONFIG_FILE)
+    
+    # 根据当前协议动态增加用户对象
+    if [[ "$proto" == "vless" ]]; then
+        jq ".inbounds[0].settings.clients += [{\"id\": \"$new_uuid\", \"decryption\": \"none\"}]" $CONFIG_FILE > ${CONFIG_FILE}.tmp
+    else
+        jq ".inbounds[0].settings.clients += [{\"id\": \"$new_uuid\"}]" $CONFIG_FILE > ${CONFIG_FILE}.tmp
+    fi
+    
+    mv ${CONFIG_FILE}.tmp $CONFIG_FILE
     systemctl restart v2ray
     echo -e "${GREEN}用户添加成功！${NC}"
     show_config
@@ -149,7 +166,7 @@ while true; do
     echo -e "${YELLOW}=================================${NC}"
     echo -e "${GREEN}   将军阁下的 V2Ray 管理面板 ${NC}"
     echo -e "${YELLOW}=================================${NC}"
-    echo -e "1) 安装 V2Ray (全新配置)"
+    echo -e "1) 安装 V2Ray (默认推荐 VLESS)"
     echo -e "2) 查看当前配置与链接"
     echo -e "3) 增加新用户 (多UUID)"
     echo -e "4) 彻底卸载 (删除所有配置)"
