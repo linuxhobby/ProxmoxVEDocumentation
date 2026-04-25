@@ -206,7 +206,7 @@ uninstall_v2ray() {
 while true; do
     echo -e "${YELLOW}=================================${NC}"
     echo -e "${GREEN}   将军阁下的 V2Ray 管理面板 ${NC}"
-    echo -e "${GREEN}   随机号码：897 ${NC}"
+    echo -e "${GREEN}   随机号码：1897 ${NC}"
     echo -e "${YELLOW}=================================${NC}"
     echo -e "1) 安装 V2Ray (默认推荐 VLESS)"
     echo -e "2) 查看当前配置与链接"
