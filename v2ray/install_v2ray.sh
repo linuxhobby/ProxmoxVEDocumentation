@@ -1,60 +1,113 @@
 #!/bin/bash
 
-# ==============================================================
-#  Debian 13 可视化初始化脚本 (过程可见)
-#  1、安装基础工具包：net-tools vnstat vim wget
-#  2、时区设置
-#  3、自动配置vnstat 配置
-#  4、执行v2ray一键安装脚本
-# ==============================================================
+# ====================================================
+# 将军自持版 V5.1 - 修复官方 404 报错 (最终修正)
+# 适配系统：Debian 12, Debian 13
+# ====================================================
 
-# 颜色定义
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-BOLD='\033[1m'
-NC='\033[0m'
+CONFIG_DIR="/etc/v2ray"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 
-# 检查 root 权限
-if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}[错误] 请使用 root 权限运行此脚本。${NC}"
-   exit 1
-fi
-
-echo -e "${BLUE}${BOLD}>>> 开始执行系统初始化...${NC}"
-
-# 1. 安装基础工具
-echo -e "${YELLOW}>>> 2. 正在安装工具 (net-tools, vnstat, vim, curl)...${NC}"
-apt-get install -y net-tools vnstat vim wget
-echo -e "${GREEN}>>> 工具安装完毕。${NC}"
-
-
-# 2. 时区设置
-echo -e "${YELLOW}>>> 1. 正在设置时区...${NC}"
-timedatectl set-timezone Asia/Shanghai
-echo -e "${GREEN}>>> 时区已同步为 Asia/Shanghai，时间状态:$(date)${NC}"
-
-# 3. vnstat 配置
-echo -e "${YELLOW}>>> 3. 正在配置 vnstat...${NC}"
-IFACE=$(ip route | awk '/default/ {print $5; exit}')
-if [ -n "$IFACE" ]; then
-    echo -e "    检测到主网卡接口为: ${BOLD}${IFACE}${NC}"
-    if [ -f /etc/vnstat.conf ]; then
-        if grep -q '^Interface' /etc/vnstat.conf; then
-            sed -i "s|^Interface .*|Interface \"$IFACE\"|" /etc/vnstat.conf
-        else
-            echo "Interface \"$IFACE\"" >> /etc/vnstat.conf
-        fi
+# --- 核心部署：使用官方维护的新地址 ---
+install_v2ray() {
+    if ! command -v v2ray &> /dev/null; then
+        echo "正在从官方源部署核心组件..."
+        mkdir -p $CONFIG_DIR
+        # 安装基础依赖
+        apt update && apt install -y curl jq gawk grep coreutils python3
+        # 使用官方目前推荐的安装脚本 (v2fly 维护)
+        bash <(curl -L https://raw.githubusercontent.com/v2fly/fuc-v2ray/master/install-release.sh)
+        
+        # 如果官方脚本没能自动启动，则手动重载
+        systemctl daemon-reload
     fi
-    vnstat --add -i "$IFACE" --force 2>/dev/null || true
-    systemctl enable vnstat
-    systemctl restart vnstat
-    echo -e "${GREEN}>>> vnstat 已绑定并启动。${NC}"
-fi
+}
 
+# --- 写入配置 ---
+write_config() {
+    local PROTO=$1
+    local UUID=$2
+    local PATH_STR=$3
 
-echo -e "${BLUE}${BOLD}>>> 所有任务执行完毕，系统已配置完成。${NC}"
+    cat > $CONFIG_FILE <<EOF
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [{
+    "port": 12345,
+    "listen": "127.0.0.1",
+    "protocol": "$PROTO",
+    "settings": {
+      "clients": [ { "id": "$UUID", "level": 0 } ],
+      "decryption": "none"
+    },
+    "streamSettings": {
+      "network": "ws",
+      "wsSettings": { "path": "$PATH_STR" }
+    }
+  }],
+  "outbounds": [
+    { "protocol": "freedom", "settings": {} }
+  ]
+}
+EOF
+    # 尝试重启服务，若服务名不同则尝试兼容处理
+    systemctl restart v2ray || systemctl restart v2ray.service
+}
 
-echo -e "${BLUE}${BOLD}>>> 下面开始执行v2ray一键安装脚本。${NC}"
-bash <(wget -qO- -o- https://github.com/233boy/v2ray/raw/master/install.sh)
+# --- 链接拼接 ---
+generate_links() {
+    if [ ! -f "$CONFIG_FILE" ]; then 
+        echo "尚未安装配置，请先执行安装。"
+        return 
+    fi
+    
+    local ADDR=$(hostname -f)
+    echo "-----------------------------------------------"
+    read -p "当前识别域名为 [$ADDR]，若需修改请输入，否则回车: " INPUT_ADDR
+    [ ! -z "$INPUT_ADDR" ] && ADDR=$INPUT_ADDR
+    
+    local PROTO=$(jq -r '.inbounds[0].protocol' $CONFIG_FILE)
+    local ID=$(jq -r '.inbounds[0].settings.clients[0].id' $CONFIG_FILE)
+    local PR=$(jq -r '.inbounds[0].streamSettings.wsSettings.path' $CONFIG_FILE)
+    
+    local P_ENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$PR', safe=''))")
+
+    echo "==============================================="
+    if [ "$PROTO" == "vless" ]; then
+        echo "VLESS 分享链接:"
+        echo "vless://${ID}@${ADDR}:443?encryption=none&security=tls&type=ws&host=${ADDR}&path=${P_ENC}#General_V5"
+    else
+        local VM_J="{\"v\":\"2\",\"ps\":\"General_V5\",\"add\":\"${ADDR}\",\"port\":\"443\",\"id\":\"${ID}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${ADDR}\",\"path\":\"${PR}\",\"tls\":\"tls\"}"
+        echo "VMess 分享链接:"
+        echo "vmess://$(echo -n "$VM_J" | base64 -w 0)"
+    fi
+    echo "==============================================="
+}
+
+# --- 菜单 ---
+while true; do
+    echo ""
+    echo "==============================================="
+    echo "      V2Ray 战略指挥面板 V5.1 (Debian 12/13)   "
+    echo "==============================================="
+    echo " 1) 部署 VLESS-WS-TLS"
+    echo " 2) 部署 VMess-WS-TLS"
+    echo " 3) 查看当前报告"
+    echo " 4) 退出"
+    read -p "指令 [1-4]: " opt
+
+    case $opt in
+        1|2)
+            install_v2ray
+            P_TYPE="vless"; [ "$opt" == "2" ] && P_TYPE="vmess"
+            UUID=$(cat /proc/sys/kernel/random/uuid)
+            WPATH="/ray$(cat /proc/sys/kernel/random/uuid | cut -c1-4)"
+            write_config "$P_TYPE" "$UUID" "$WPATH"
+            generate_links
+            read -p "回车继续..."
+            ;;
+        3) generate_links; read -p "回车继续..." ;;
+        4) exit 0 ;;
+        *) echo "无效指令" ;;
+    esac
+done
