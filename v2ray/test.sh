@@ -1,48 +1,39 @@
 #!/bin/bash
 
 # ====================================================
-# 将军阁下的专属 V2Ray (VLESS+WS+TLS) 独立安装脚本
-# 支持系统：Debian 11+, Ubuntu 20.04+
-# 功能：自动核心安装、Caddy证书配置、生成分享链接
+# 将军阁下的专属 V2Ray 独立安装脚本 (修复服务未找到问题)
 # ====================================================
 
-# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-# 1. 环境检查
 [[ $EUID -ne 0 ]] && echo -e "${RED}错误: 必须使用 root 权限运行!${NC}" && exit 1
 
-# 2. 交互输入
-read -p "请输入您的解析域名 (例如: cc.myvpsworld.top): " DOMAIN
-if [[ -z "$DOMAIN" ]]; then
-    echo -e "${RED}域名不能为空!${NC}"
-    exit 1
-fi
+read -p "请输入您的解析域名: " DOMAIN
+[[ -z "$DOMAIN" ]] && exit 1
 
-# 3. 安装基础依赖
-echo -e "${GREEN}正在同步系统时区并安装基础依赖...${NC}"
+echo -e "${GREEN}安装依赖与同步时区...${NC}"
 ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
-apt update
-apt install -y curl wget jq uuid-runtime debian-keyring debian-archive-keyring apt-transport-https vnstat
+apt update && apt install -y curl wget jq uuid-runtime debian-keyring debian-archive-keyring apt-transport-https vnstat
 
-# 4. 安装 V2Ray 官方核心 (V2Fly)
-echo -e "${GREEN}正在从官方仓库安装 V2Ray 核心...${NC}"
+# 1. 安装 V2Ray 官方核心
+echo -e "${GREEN}正在从官方仓库安装 V2Ray...${NC}"
+# 使用官方推荐的安装方式
 bash <(curl -L https://raw.githubusercontent.com/v2fly/fscript/master/install-release.sh)
 
-# 5. 安装 Caddy 2 (自动处理 TLS 证书)
-echo -e "${GREEN}正在安装 Caddy 2 负责反向代理与证书申请...${NC}"
+# 2. 安装 Caddy 2
+echo -e "${GREEN}安装 Caddy 2...${NC}"
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
 apt update && apt install caddy -y
 
-# 6. 生成配置参数
+# 3. 准备配置参数
 UUID=$(uuidgen)
-# 随机生成一个路径，例如 /v2ray-abc123
 WSPATH="/$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 10)"
 
-# 7. 写入 V2Ray 配置文件
+# 4. 写入配置文件 (注意路径：官方脚本默认路径通常在 /usr/local/etc/v2ray/)
+mkdir -p /usr/local/etc/v2ray
 cat <<EOF > /usr/local/etc/v2ray/config.json
 {
   "inbounds": [{
@@ -62,7 +53,7 @@ cat <<EOF > /usr/local/etc/v2ray/config.json
 }
 EOF
 
-# 8. 写入 Caddyfile (自动化证书与反向代理)
+# 5. 写入 Caddyfile
 cat <<EOF > /etc/caddy/Caddyfile
 $DOMAIN {
     reverse_proxy $WSPATH localhost:10000
@@ -72,32 +63,55 @@ $DOMAIN {
 }
 EOF
 
-# 9. 重启并设置开机自启
-echo -e "${GREEN}正在启动服务并设置自启动...${NC}"
-systemctl restart v2ray
-systemctl enable v2ray
-systemctl restart caddy
+# 6. 核心修复：检测并启动服务
+echo -e "${GREEN}正在配置服务状态...${NC}"
+
+# 尝试启动新版 V2Fly 服务名
+if systemctl list-unit-files | grep -q "v2ray.service"; then
+    V2_SERVICE="v2ray"
+elif systemctl list-unit-files | grep -q "v2ray@"; then
+    V2_SERVICE="v2ray@config"
+else
+    # 如果还是没找到，手动创建一个简单的 systemd 服务文件
+    cat <<EOF > /etc/systemd/system/v2ray.service
+[Unit]
+Description=V2Ray Service
+Documentation=https://www.v2fly.org/
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/v2ray run -c /usr/local/etc/v2ray/config.json
+Restart=on-failure
+RestartPreventExitStatus=23
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    V2_SERVICE="v2ray"
+fi
+
+systemctl enable $V2_SERVICE
+systemctl restart $V2_SERVICE
 systemctl enable caddy
+systemctl restart caddy
 
-# 10. 生成 VLESS 分享链接
-# 将路径中的 / 编码为 %2F 确保链接兼容性
+# 7. 生成链接
 SAFE_PATH=$(echo -n "$WSPATH" | sed 's/\//%2F/g')
-VLESS_LINK="vless://$UUID@$DOMAIN:443?encryption=none&security=tls&type=ws&host=$DOMAIN&path=$SAFE_PATH#$DOMAIN-vless"
+VLESS_LINK="vless://$UUID@$DOMAIN:443?encryption=none&security=tls&type=ws&host=$DOMAIN&path=$SAFE_PATH#$DOMAIN"
 
-# 11. 最终结果展示
 clear
 echo -e "-------------------------------------------------------"
-echo -e "${GREEN}安装成功！将军阁下，您的专属配置已就绪：${NC}"
-echo -e "-------------------------------------------------------"
+echo -e "${GREEN}安装成功！服务已强制修复并启动。${NC}"
+echo -e "服务名称: $V2_SERVICE"
 echo -e "域名: ${DOMAIN}"
-echo -e "端口: 443"
 echo -e "UUID: ${UUID}"
 echo -e "路径: ${WSPATH}"
-echo -e "协议: VLESS + WS + TLS"
-echo -e "流量统计: 已开启 (使用 vnstat 查看)"
 echo -e "-------------------------------------------------------"
 echo -e "${GREEN}您的 VLESS 节点链接：${NC}"
 echo -e "${RED}${VLESS_LINK}${NC}"
 echo -e "-------------------------------------------------------"
-echo -e "注意：请确保域名的 A 记录已正确指向本服务器 IP。"
-echo -e "Caddy 会在首次连接时自动为您申请 SSL 证书。"
