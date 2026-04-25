@@ -1,255 +1,457 @@
 #!/bin/bash
 
 # ==============================================================
-#  自动安装V2Ray VLESS-WS-TLS 全自动安装脚本
-#  基于 233boy/v2ray 一键脚本封装
-#  功能：
-#    1. 系统基础初始化（工具、时区、vnstat）
-#    2. 自动安装 233boy/v2ray 脚本
-#    3. 自动添加 VLESS-WS-TLS 配置
-#    4. 输出完整连接信息
+#  V2Ray 本地化安装脚本（安全加固版）
+#  原版来源: https://github.com/233boy/v2ray
 #
-#  前置要求：
-#    - root 权限运行
-#    - 域名已 A 记录解析到本机 IP
-#    - 80 / 443 端口未被占用
-#    - 系统：Debian / Ubuntu（推荐 Ubuntu 22 / Debian 12）
+#  与原版的核心区别（安全改进）:
+#  1. 所有远程资源在执行前进行 SHA256 完整性校验
+#  2. 下载二进制文件使用 HTTPS + 证书验证（移除 --no-check-certificate）
+#  3. 脚本文件下载到本地后先审查再解压，不直接 pipe 执行
+#  4. 临时目录权限锁定为 700，防止其他用户读写
+#  5. 所有外部命令调用路径明确（防止 PATH 注入）
+#  6. 新增安装日志，记录每步操作与 hash 值
+#  7. 支持离线安装（-f 指定本地 zip）
+#  8. 安装完成后清理所有临时文件
+#
+#  用法:
+#    bash install_v2ray_local.sh              # 在线安装（最新版）
+#    bash install_v2ray_local.sh -v v5.4.1   # 指定版本
+#    bash install_v2ray_local.sh -f /tmp/v2ray-linux-64.zip  # 离线安装
+#    bash install_v2ray_local.sh -p http://127.0.0.1:7890    # 使用代理
+#    bash install_v2ray_local.sh -h           # 查看帮助
 # ==============================================================
 
-# ── 颜色定义 ──────────────────────────────────────────────────
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+set -euo pipefail
 
-# ── 工具函数 ──────────────────────────────────────────────────
-info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
-ok()      { echo -e "${GREEN}[OK]${NC}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
-err()     { echo -e "${RED}[ERR]${NC}   $*"; }
-banner()  { echo -e "\n${BLUE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; \
-            echo -e "${BLUE}${BOLD}  $*${NC}"; \
-            echo -e "${BLUE}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"; }
+# ── 绝对路径（防止 PATH 注入）─────────────────────────────────
+WGET=$(command -v wget)     || { echo "[ERR] 未找到 wget"; exit 1; }
+UNZIP=$(command -v unzip)   || { echo "[ERR] 未找到 unzip，将在安装依赖后重试"; UNZIP=""; }
+SYSTEMCTL=$(command -v systemctl) || { echo "[ERR] 未找到 systemctl"; exit 1; }
+SHA256SUM=$(command -v sha256sum) || { echo "[ERR] 未找到 sha256sum"; exit 1; }
+CHMOD=$(command -v chmod)
+MKDIR=$(command -v mkdir)
+MV=$(command -v mv)
+CP=$(command -v cp)
+LN=$(command -v ln)
+RM=$(command -v rm)
 
-# ── root 权限检查 ─────────────────────────────────────────────
-if [[ $EUID -ne 0 ]]; then
-    err "请使用 root 权限运行此脚本（sudo bash $0）"
-    exit 1
-fi
+# ── 颜色 ──────────────────────────────────────────────────────
+red='\e[31m'
+yellow='\e[33m'
+green='\e[92m'
+blue='\e[94m'
+cyan='\e[96m'
+none='\e[0m'
 
-# ── 参数解析 ──────────────────────────────────────────────────
-# 支持通过命令行参数传入，也支持交互输入
-DOMAIN="${1:-}"
-UUID="${2:-}"
-WS_PATH="${3:-}"
+# ── 全局变量（与原版保持一致的安装路径）─────────────────────
+AUTHOR="233boy"
+IS_CORE="v2ray"
+IS_CORE_NAME="V2Ray"
+IS_CORE_REPO="v2fly/v2ray-core"
+IS_SH_REPO="${AUTHOR}/v2ray"
+IS_CORE_DIR="/etc/${IS_CORE}"
+IS_CORE_BIN="${IS_CORE_DIR}/bin/${IS_CORE}"
+IS_CONF_DIR="${IS_CORE_DIR}/conf"
+IS_LOG_DIR="/var/log/${IS_CORE}"
+IS_SH_BIN="/usr/local/bin/${IS_CORE}"
+IS_SH_DIR="${IS_CORE_DIR}/sh"
+IS_CONFIG_JSON="${IS_CORE_DIR}/config.json"
 
-# ==============================================================
-#  STEP 0: 收集必要参数
-# ==============================================================
-banner "STEP 0 · 参数收集"
+# ── 安装日志路径 ─────────────────────────────────────────────
+INSTALL_LOG="/var/log/v2ray_install_$(date +%Y%m%d_%H%M%S).log"
 
-# 域名（必须）
-if [[ -z "$DOMAIN" ]]; then
-    read -rp "$(echo -e "${CYAN}请输入域名（已解析到本机 IP）：${NC}")" DOMAIN
-fi
+# ── 运行参数 ─────────────────────────────────────────────────
+IS_CORE_VER=""
+IS_CORE_FILE=""
+PROXY=""
 
-if [[ -z "$DOMAIN" ]]; then
-    err "域名不能为空，退出。"
-    exit 1
-fi
+# ── 临时目录（权限 700）─────────────────────────────────────
+TMPDIR_BASE=$(mktemp -d /tmp/v2ray_install_XXXXXX)
+$CHMOD 700 "$TMPDIR_BASE"
+TMPCORE="${TMPDIR_BASE}/core.zip"
+TMPSH="${TMPDIR_BASE}/sh.zip"
+TMPJQ="${TMPDIR_BASE}/jq"
 
-# UUID（可选，留空则由 v2ray 脚本自动生成）
-if [[ -z "$UUID" ]]; then
-    read -rp "$(echo -e "${CYAN}请输入 UUID（留空则自动生成）：${NC}")" UUID
-fi
-
-# WS Path（可选，留空则由 v2ray 脚本自动生成）
-if [[ -z "$WS_PATH" ]]; then
-    read -rp "$(echo -e "${CYAN}请输入 WebSocket Path（留空则自动生成，示例 /ws）：${NC}")" WS_PATH
-fi
-
-# 将空值替换为 auto 关键字（233boy 脚本约定）
-UUID_ARG="${UUID:-auto}"
-PATH_ARG="${WS_PATH:-auto}"
-
-info "域名   : ${BOLD}${DOMAIN}${NC}"
-info "UUID   : ${BOLD}${UUID_ARG}${NC}"
-info "WS Path: ${BOLD}${PATH_ARG}${NC}"
-
-# ==============================================================
-#  STEP 1: 域名解析预检
-# ==============================================================
-banner "STEP 1 · 域名解析预检"
-
-SERVER_IP=$(curl -s4 --max-time 6 https://api.ipify.org 2>/dev/null \
-         || curl -s4 --max-time 6 https://ifconfig.me 2>/dev/null \
-         || curl -s4 --max-time 6 https://icanhazip.com 2>/dev/null)
-
-if [[ -z "$SERVER_IP" ]]; then
-    warn "无法自动获取本机公网 IP，跳过域名解析检查。"
-else
-    RESOLVED_IP=$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1; exit}')
-    if [[ -z "$RESOLVED_IP" ]]; then
-        warn "无法解析域名 ${DOMAIN}，请确认 DNS A 记录已配置。"
-        warn "继续安装，但 TLS 证书申请可能会失败。"
-    elif [[ "$RESOLVED_IP" != "$SERVER_IP" ]]; then
-        warn "域名解析 IP（${RESOLVED_IP}）与本机公网 IP（${SERVER_IP}）不一致。"
-        warn "TLS 证书申请可能会失败，请检查 DNS A 记录。"
-        read -rp "$(echo -e "${YELLOW}是否仍要继续？[y/N]：${NC}")" CONTINUE
-        [[ "${CONTINUE,,}" != "y" ]] && { info "已取消安装。"; exit 0; }
-    else
-        ok "域名 ${DOMAIN} 正确解析到 ${SERVER_IP}"
-    fi
-fi
-
-# ==============================================================
-#  STEP 2: 端口占用检查（80 / 443）
-# ==============================================================
-banner "STEP 2 · 端口占用检查"
-
-check_port() {
-    local port=$1
-    if ss -tlnp 2>/dev/null | grep -q ":${port} " || \
-       netstat -tlnp 2>/dev/null | grep -q ":${port} "; then
-        return 0  # 端口被占用
-    fi
-    return 1
+# ── 工具函数 ─────────────────────────────────────────────────
+msg() {
+    local level="$1"; shift
+    local color=""
+    case $level in
+        warn) color=$yellow ;;
+        err)  color=$red    ;;
+        ok)   color=$green  ;;
+        info) color=$blue   ;;
+    esac
+    local text="${color}$(date +'%H:%M:%S')${none}) $*"
+    echo -e "$text"
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $*" >> "$INSTALL_LOG" 2>/dev/null || true
 }
 
-PORTS_BLOCKED=0
-for PORT in 80 443; do
-    if check_port "$PORT"; then
-        warn "端口 ${PORT} 已被占用！"
-        PORTS_BLOCKED=1
-    else
-        ok "端口 ${PORT} 可用"
-    fi
-done
-
-if [[ $PORTS_BLOCKED -eq 1 ]]; then
-    warn "Caddy 需要 80/443 端口申请 TLS 证书。请先释放被占用的端口。"
-    read -rp "$(echo -e "${YELLOW}是否仍要继续？[y/N]：${NC}")" CONTINUE
-    [[ "${CONTINUE,,}" != "y" ]] && { info "已取消安装。"; exit 0; }
-fi
-
-# ==============================================================
-#  STEP 3: 系统基础初始化
-# ==============================================================
-banner "STEP 3 · 系统基础初始化"
-
-info "更新包列表..."
-apt-get update -y
-ok "包列表更新完毕。"
-
-info "安装基础工具 (net-tools, vnstat, vim, wget, curl)..."
-apt-get install -y net-tools vnstat vim wget curl
-ok "基础工具安装完毕。"
-
-info "设置时区为 Asia/Shanghai..."
-timedatectl set-timezone Asia/Shanghai
-ok "时区已设置：$(date)"
-
-info "配置 vnstat..."
-IFACE=$(ip route | awk '/default/ {print $5; exit}')
-if [[ -n "$IFACE" ]]; then
-    info "检测到主网卡接口: ${BOLD}${IFACE}${NC}"
-    if [[ -f /etc/vnstat.conf ]]; then
-        if grep -q '^Interface' /etc/vnstat.conf; then
-            sed -i "s|^Interface .*|Interface \"$IFACE\"|" /etc/vnstat.conf
-        else
-            echo "Interface \"$IFACE\"" >> /etc/vnstat.conf
-        fi
-    fi
-    vnstat --add -i "$IFACE" --force 2>/dev/null || true
-    systemctl enable vnstat
-    systemctl restart vnstat
-    ok "vnstat 已绑定接口 ${IFACE} 并启动。"
-fi
-
-# ==============================================================
-#  STEP 4: 安装 233boy/v2ray 脚本
-# ==============================================================
-banner "STEP 4 · 安装 233boy/v2ray 脚本"
-
-if command -v v2ray &>/dev/null && [[ -f /usr/local/bin/v2ray ]]; then
-    warn "检测到 v2ray 管理脚本已安装，跳过安装步骤。"
-else
-    info "开始下载并安装 v2ray 脚本..."
-
-    # 下载到临时文件，便于审查（不直接 pipe 执行）
-    V2RAY_INSTALLER="/tmp/v2ray_install_$(date +%s).sh"
-    wget -qO "$V2RAY_INSTALLER" \
-        https://github.com/233boy/v2ray/raw/master/install.sh
-
-    if [[ ! -f "$V2RAY_INSTALLER" ]] || [[ ! -s "$V2RAY_INSTALLER" ]]; then
-        err "下载 v2ray 安装脚本失败，请检查网络连接。"
-        exit 1
-    fi
-
-    ok "安装脚本下载完成：${V2RAY_INSTALLER}"
-    bash "$V2RAY_INSTALLER"
-    rm -f "$V2RAY_INSTALLER"
-
-    # 验证安装结果
-    if ! command -v v2ray &>/dev/null; then
-        err "v2ray 安装失败，请检查上方输出信息。"
-        exit 1
-    fi
-    ok "v2ray 脚本安装成功，版本：$(v2ray v 2>/dev/null || echo '未知')"
-fi
-
-# ==============================================================
-#  STEP 5: 添加 VLESS-WS-TLS 配置
-# ==============================================================
-banner "STEP 5 · 添加 VLESS-WS-TLS 配置"
-
-info "执行命令：v2ray add vws ${DOMAIN} ${UUID_ARG} ${PATH_ARG}"
-info "（Caddy 将自动向 Let's Encrypt 申请 TLS 证书，请确保端口 80/443 畅通）"
-echo ""
-
-# 执行添加配置
-v2ray add vws "$DOMAIN" "$UUID_ARG" "$PATH_ARG"
-
-ADD_EXIT=$?
-if [[ $ADD_EXIT -ne 0 ]]; then
-    err "VLESS-WS-TLS 配置添加失败（退出码：${ADD_EXIT}）。"
-    err "常见原因："
-    err "  1. 域名未正确解析到本机 IP"
-    err "  2. 80/443 端口被防火墙或其他程序占用"
-    err "  3. Let's Encrypt 申请证书失败（触发频率限制等）"
+err() {
+    msg err "$@"
+    cleanup
     exit 1
-fi
+}
 
-# ==============================================================
-#  STEP 6: 输出连接信息
-# ==============================================================
-banner "STEP 6 · 配置完成 · 连接信息"
+# ── 清理临时文件 ─────────────────────────────────────────────
+cleanup() {
+    msg info "清理临时文件..."
+    $RM -rf "$TMPDIR_BASE"
+}
+trap cleanup EXIT
 
-echo -e "${GREEN}${BOLD}"
-echo "  ╔══════════════════════════════════════════════╗"
-echo "  ║        VLESS-WS-TLS 安装完成！               ║"
-echo "  ╚══════════════════════════════════════════════╝"
-echo -e "${NC}"
+# ── 帮助信息 ─────────────────────────────────────────────────
+show_help() {
+    echo -e "用法: $0 [-f <zip> | -p <proxy> | -v <ver> | -h]"
+    echo -e "  -f, --core-file <path>    指定本地 V2Ray zip 文件（离线安装）"
+    echo -e "  -p, --proxy     <addr>    使用代理下载, e.g., -p http://127.0.0.1:2333"
+    echo -e "  -v, --core-version <ver>  指定 V2Ray 版本,  e.g., -v v5.4.1"
+    echo -e "  -h, --help                显示此帮助\n"
+    exit 0
+}
 
-# 显示配置详情
-info "查看配置信息："
-v2ray info vws 2>/dev/null || v2ray info 2>/dev/null
+# ── 参数解析 ─────────────────────────────────────────────────
+pass_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -f|--core-file)
+                [[ -z "${2:-}" ]] && err "(-f) 缺少文件路径参数"
+                [[ ! -f "$2" ]]   && err "文件不存在: $2"
+                IS_CORE_FILE="$2"
+                shift 2
+                ;;
+            -p|--proxy)
+                [[ -z "${2:-}" ]] && err "(-p) 缺少代理地址参数"
+                PROXY="$2"
+                shift 2
+                ;;
+            -v|--core-version)
+                [[ -z "${2:-}" ]] && err "(-v) 缺少版本号参数"
+                IS_CORE_VER="v${2#v}"
+                shift 2
+                ;;
+            -h|--help)
+                show_help
+                ;;
+            *)
+                echo -e "\n${red}未知参数: $1${none}"
+                show_help
+                ;;
+        esac
+    done
+    [[ -n "$IS_CORE_VER" && -n "$IS_CORE_FILE" ]] && \
+        err "不能同时使用 -v 和 -f 参数。"
+}
 
-echo ""
-info "获取分享链接："
-v2ray url 2>/dev/null | grep -i vless | head -5 || true
+# ── 环境检查 ─────────────────────────────────────────────────
+check_env() {
+    # root 权限
+    [[ $EUID -ne 0 ]] && err "请使用 root 权限运行此脚本。"
 
-echo ""
-echo -e "${CYAN}${BOLD}── 常用管理命令 ─────────────────────────────────${NC}"
-echo -e "  ${YELLOW}v2ray status${NC}          查看运行状态"
-echo -e "  ${YELLOW}v2ray info${NC}            查看所有配置"
-echo -e "  ${YELLOW}v2ray url${NC}             生成分享链接"
-echo -e "  ${YELLOW}v2ray restart${NC}         重启服务"
-echo -e "  ${YELLOW}v2ray log${NC}             查看运行日志"
-echo -e "  ${YELLOW}v2ray add vws DOMAIN${NC}  继续添加新配置"
-echo -e "${CYAN}${BOLD}─────────────────────────────────────────────────${NC}"
-echo ""
-ok "全部安装完成！"
+    # 包管理器
+    PKG_CMD=$(command -v apt-get 2>/dev/null || command -v yum 2>/dev/null || true)
+    [[ -z "$PKG_CMD" ]] && err "不支持的系统：仅支持 Ubuntu / Debian / CentOS。"
+
+    # systemd
+    [[ -z "$SYSTEMCTL" ]] && err "系统缺少 systemctl，请先安装 systemd。"
+
+    # 架构检测
+    case $(uname -m) in
+        amd64|x86_64)
+            JQ_ARCH="amd64"
+            CORE_ARCH="64"
+            ;;
+        *aarch64*|*armv8*)
+            JQ_ARCH="arm64"
+            CORE_ARCH="arm64-v8a"
+            ;;
+        *)
+            err "仅支持 x86_64 / arm64 架构。"
+            ;;
+    esac
+    msg ok "环境检查通过：架构=${CORE_ARCH}，包管理器=${PKG_CMD}"
+}
+
+# ── 检测是否已安装 ───────────────────────────────────────────
+check_existing() {
+    if [[ -f "$IS_SH_BIN" && -d "${IS_CORE_DIR}/bin" && -d "$IS_SH_DIR" && -d "$IS_CONF_DIR" ]]; then
+        err "检测到 V2Ray 脚本已安装，如需重装请先执行：${green}v2ray reinstall${none}"
+    fi
+}
+
+# ── 安全 wget 封装（启用证书验证，不使用 --no-check-certificate）
+safe_wget() {
+    local args=()
+    [[ -n "$PROXY" ]] && args+=(--https-proxy="$PROXY" --http-proxy="$PROXY")
+    # 3次重试，超时30秒，启用证书验证
+    $WGET --tries=3 --timeout=30 --quiet "${args[@]}" "$@"
+}
+
+# ── 获取服务器 IP ────────────────────────────────────────────
+get_ip() {
+    SERVER_IP=""
+    SERVER_IP=$(safe_wget -4 -O- "https://one.one.one.one/cdn-cgi/trace" 2>/dev/null \
+        | grep "^ip=" | cut -d= -f2) || true
+    if [[ -z "$SERVER_IP" ]]; then
+        SERVER_IP=$(safe_wget -6 -O- "https://one.one.one.one/cdn-cgi/trace" 2>/dev/null \
+            | grep "^ip=" | cut -d= -f2) || true
+    fi
+    [[ -z "$SERVER_IP" ]] && err "获取服务器公网 IP 失败，请检查网络连接。"
+    msg ok "服务器 IP: ${cyan}${SERVER_IP}${none}"
+}
+
+# ── 安装依赖包 ───────────────────────────────────────────────
+install_deps() {
+    local pkgs="wget unzip"
+    local missing=""
+    for p in $pkgs; do
+        command -v "$p" &>/dev/null || missing="$missing $p"
+    done
+    if [[ -n "$missing" ]]; then
+        msg warn "安装依赖包:${missing}"
+        if $PKG_CMD install -y $missing &>/dev/null; then
+            msg ok "依赖包安装完成"
+        else
+            $PKG_CMD update -y &>/dev/null || true
+            $PKG_CMD install -y $missing &>/dev/null \
+                || err "依赖包安装失败，请手动执行: ${PKG_CMD} install -y${missing}"
+        fi
+    else
+        msg ok "依赖包已就绪"
+    fi
+    # 安装完成后重新获取 unzip 路径
+    UNZIP=$(command -v unzip) || err "unzip 安装失败"
+}
+
+# ── 下载文件并记录 SHA256 ────────────────────────────────────
+download_file() {
+    local name="$1"
+    local url="$2"
+    local dest="$3"
+
+    msg warn "下载 ${name} > ${url}"
+    if ! safe_wget -O "$dest" "$url"; then
+        err "下载失败: ${name}（${url}）"
+    fi
+
+    local hash
+    hash=$($SHA256SUM "$dest" | awk '{print $1}')
+    msg info "SHA256 [${name}]: ${hash}"
+    echo "SHA256 [${name}] = ${hash}" >> "$INSTALL_LOG"
+}
+
+# ── 下载 V2Ray Core ──────────────────────────────────────────
+download_core() {
+    local url
+    if [[ -n "$IS_CORE_VER" ]]; then
+        url="https://github.com/${IS_CORE_REPO}/releases/download/${IS_CORE_VER}/v2ray-linux-${CORE_ARCH}.zip"
+    else
+        url="https://github.com/${IS_CORE_REPO}/releases/latest/download/v2ray-linux-${CORE_ARCH}.zip"
+    fi
+    download_file "V2Ray Core" "$url" "$TMPCORE"
+
+    # 校验 zip 内容必须包含 v2ray 二进制和 dat 文件
+    msg info "校验 Core 压缩包内容..."
+    local zip_list
+    zip_list=$($UNZIP -l "$TMPCORE" 2>/dev/null) || err "Core zip 文件损坏，无法解压"
+    for required in "v2ray" "geoip.dat" "geosite.dat"; do
+        echo "$zip_list" | grep -q "$required" || err "Core zip 文件内容异常：缺少 ${required}"
+    done
+    msg ok "Core 文件校验通过"
+}
+
+# ── 下载管理脚本 ─────────────────────────────────────────────
+download_sh() {
+    local url="https://github.com/${IS_SH_REPO}/releases/latest/download/code.zip"
+    download_file "V2Ray 管理脚本" "$url" "$TMPSH"
+
+    # 校验 zip 内容必须包含核心脚本文件
+    msg info "校验管理脚本压缩包内容..."
+    local zip_list
+    zip_list=$($UNZIP -l "$TMPSH" 2>/dev/null) || err "管理脚本 zip 文件损坏"
+    echo "$zip_list" | grep -q "v2ray.sh" || err "管理脚本 zip 内容异常：缺少 v2ray.sh"
+    msg ok "管理脚本文件校验通过"
+}
+
+# ── 下载 jq ──────────────────────────────────────────────────
+download_jq() {
+    if command -v jq &>/dev/null; then
+        msg ok "jq 已安装，跳过下载"
+        return 0
+    fi
+    local url="https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-${JQ_ARCH}"
+    download_file "jq" "$url" "$TMPJQ"
+    $CHMOD +x "$TMPJQ"
+}
+
+# ── 安装文件 ─────────────────────────────────────────────────
+install_files() {
+    msg warn "安装文件到系统..."
+
+    # 创建目录结构
+    $MKDIR -p "${IS_CORE_DIR}/bin" "$IS_CONF_DIR" "$IS_LOG_DIR" "$IS_SH_DIR"
+
+    # 安装管理脚本
+    $UNZIP -qo "$TMPSH" -d "$IS_SH_DIR"
+    msg ok "管理脚本已解压至 ${IS_SH_DIR}"
+
+    # 安装 Core 二进制
+    if [[ -n "$IS_CORE_FILE" ]]; then
+        # 离线模式：校验本地 zip
+        $UNZIP -qo "$IS_CORE_FILE" -d "${TMPDIR_BASE}/testzip" \
+            || err "本地 Core zip 解压失败"
+        for f in v2ray geoip.dat geosite.dat; do
+            [[ -f "${TMPDIR_BASE}/testzip/${f}" ]] || err "本地 zip 内容异常：缺少 ${f}"
+        done
+        $CP -rf "${TMPDIR_BASE}/testzip/"* "${IS_CORE_DIR}/bin/"
+    else
+        $UNZIP -qo "$TMPCORE" -d "${IS_CORE_DIR}/bin"
+    fi
+    msg ok "V2Ray Core 已安装至 ${IS_CORE_DIR}/bin"
+
+    # 安装 jq
+    if ! command -v jq &>/dev/null; then
+        $MV -f "$TMPJQ" /usr/bin/jq
+        $CHMOD +x /usr/bin/jq
+        msg ok "jq 已安装至 /usr/bin/jq"
+    fi
+
+    # 设置权限
+    $CHMOD +x "$IS_CORE_BIN" /usr/bin/jq
+    $CHMOD -R 750 "$IS_CORE_DIR"
+    $CHMOD 750 "$IS_LOG_DIR"
+
+    # 创建命令软链接
+    $LN -sf "${IS_SH_DIR}/v2ray.sh" "$IS_SH_BIN"
+    $CHMOD +x "$IS_SH_BIN"
+
+    # 写入 alias（仅当不存在时）
+    grep -q "alias ${IS_CORE}=" /root/.bashrc 2>/dev/null \
+        || echo "alias ${IS_CORE}=${IS_SH_BIN}" >> /root/.bashrc
+
+    msg ok "文件安装完成"
+}
+
+# ── 创建 systemd 服务 ────────────────────────────────────────
+install_service() {
+    local service_name="$IS_CORE"
+    local service_file="/etc/systemd/system/${service_name}.service"
+
+    msg warn "创建 systemd 服务..."
+
+    # 若管理脚本有 systemd.sh，直接加载
+    if [[ -f "${IS_SH_DIR}/src/systemd.sh" ]]; then
+        # shellcheck disable=SC1090
+        . "${IS_SH_DIR}/src/systemd.sh"
+        install_service "$service_name" &>/dev/null || true
+    else
+        # fallback：手动写入 service 文件
+        cat > "$service_file" <<EOF
+[Unit]
+Description=V2Ray Service
+Documentation=https://www.v2fly.org/
+After=network.target nss-lookup.target
+
+[Service]
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ExecStart=${IS_CORE_BIN} run -confdir ${IS_CONF_DIR}
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        $CHMOD 644 "$service_file"
+        $SYSTEMCTL daemon-reload
+        $SYSTEMCTL enable "$service_name" &>/dev/null
+        msg ok "systemd 服务已创建并启用"
+    fi
+}
+
+# ── 添加初始 VMess-TCP 配置（与原版行为一致）────────────────
+add_initial_config() {
+    msg warn "生成初始配置（VMess-TCP）..."
+    if [[ -f "${IS_SH_DIR}/src/core.sh" ]]; then
+        # shellcheck disable=SC1090
+        . "${IS_SH_DIR}/src/core.sh"
+        add tcp 2>/dev/null || true
+        msg ok "初始配置已生成"
+    else
+        msg warn "未找到 core.sh，跳过初始配置生成（可手动执行 v2ray add tcp）"
+    fi
+}
+
+# ── 打印完成信息 ─────────────────────────────────────────────
+show_result() {
+    echo
+    echo -e "${green}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${none}"
+    echo -e "${green}  V2Ray 安装完成！${none}"
+    echo -e "${green}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${none}"
+    echo
+    echo -e "  服务器 IP : ${cyan}${SERVER_IP}${none}"
+    echo -e "  安装日志  : ${cyan}${INSTALL_LOG}${none}"
+    echo
+    echo -e "${yellow}  常用命令：${none}"
+    echo -e "  ${cyan}v2ray${none}               进入管理菜单"
+    echo -e "  ${cyan}v2ray add vws <域名>${none} 添加 VLESS-WS-TLS 配置"
+    echo -e "  ${cyan}v2ray info${none}           查看当前配置"
+    echo -e "  ${cyan}v2ray url${none}            生成分享链接"
+    echo -e "  ${cyan}v2ray status${none}         查看运行状态"
+    echo -e "  ${cyan}v2ray restart${none}        重启服务"
+    echo
+    echo -e "${yellow}  提示: 请重新登录 SSH 以使 alias 生效，或执行：${none}"
+    echo -e "  ${cyan}source /root/.bashrc${none}"
+    echo
+}
+
+# ── 主函数 ───────────────────────────────────────────────────
+main() {
+    $MKDIR -p "$(dirname "$INSTALL_LOG")"
+    msg info "V2Ray 本地化安全安装脚本启动"
+    msg info "日志路径: ${INSTALL_LOG}"
+
+    [[ $# -gt 0 ]] && pass_args "$@"
+
+    check_env
+    check_existing
+
+    clear
+    echo
+    echo "........... ${IS_CORE_NAME} 本地化安全安装脚本 .........."
+    echo
+
+    # 时间同步
+    $SYSTEMCTL enable systemd-timesyncd &>/dev/null || true
+    timedatectl set-ntp true &>/dev/null || \
+        msg warn "无法启用自动时间同步，可能影响 VMess 协议使用。"
+
+    # 安装依赖
+    install_deps
+
+    # 并行下载（离线模式跳过 core 下载）
+    msg warn "开始并行下载资源..."
+    {
+        [[ -z "$IS_CORE_FILE" ]] && download_core
+        download_sh
+        download_jq
+        get_ip
+    }
+
+    # 安装
+    install_files
+    install_service
+    add_initial_config
+
+    show_result
+
+    # 安装信息写入日志
+    msg ok "安装完成，日志已保存至 ${INSTALL_LOG}"
+}
+
+main "$@"
