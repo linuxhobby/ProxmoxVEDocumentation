@@ -2,6 +2,7 @@
 
 # ====================================================
 # 将军阁下的专属 V2Ray 综合管理脚本 (终极优化版)
+# curl -sL https://raw.githubusercontent.com/linuxhobby/ProxmoxVE/refs/heads/main/v2ray/test.sh -o test.sh && chmod +x test.sh && ./test.sh
 # ====================================================
 
 RED='\033[0;31m'
